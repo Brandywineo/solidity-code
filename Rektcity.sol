@@ -371,7 +371,7 @@ contract Rektcity is Context, IERC20, Ownable {
     mapping (address => bool) private _isExcludedFromFee;
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
-    address private _developmentWalletAddress = 0x66B22ce6228732a540dE54f9e4291662716b2Ba7;
+    address private _developmentWalletAddress = 0x16c07676F7CA0d326b2E2B2e44D8cfE8F380b5d0;
     uint256 private constant MAX = ~uint256(0);
     uint256 private _tTotal = 400000000000 * 10**18;
     uint256 private _rTotal = (MAX - (MAX % _tTotal));
@@ -742,3 +742,4 @@ contract Rektcity is Context, IERC20, Ownable {
     }
 
 }
+
