@@ -1,0 +1,645 @@
+//@version=6
+// Gold Structure & Reversal Engine v1.0
+// Creator: barucci_goon
+// Purpose: Non-repainting, close-confirmed confluence framework for XAUUSD.
+// Notes: Signals are decision support, not guarantees. Tune settings to your broker feed and session timezone.
+
+indicator(
+     "Gold Structure & Reversal Engine [barucci_goon]",
+     shorttitle = "BG Gold SRE",
+     overlay = true,
+     max_bars_back = 5000,
+     max_labels_count = 500,
+     max_lines_count = 500,
+     max_boxes_count = 500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+
+groupGeneral = "01 — General"
+showDashboard      = input.bool(true, "Show dashboard", group = groupGeneral)
+dashboardPosition  = input.string("Top Right", "Dashboard position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = groupGeneral)
+confirmedOnly      = input.bool(true, "Signals only after candle close", group = groupGeneral, tooltip = "Recommended. Prevents intrabar signal flicker.")
+paintBars          = input.bool(false, "Color bars by dominant score", group = groupGeneral)
+showSignalLabels   = input.bool(true, "Show BUY/SELL labels", group = groupGeneral)
+signalThreshold    = input.int(72, "Confirmed signal threshold", minval = 50, maxval = 95, group = groupGeneral)
+watchThreshold     = input.int(58, "Reversal-watch threshold", minval = 40, maxval = 90, group = groupGeneral)
+minimumScoreEdge   = input.int(8, "Minimum score advantage", minval = 0, maxval = 30, group = groupGeneral)
+signalCooldownBars = input.int(8, "Signal cooldown bars", minval = 1, maxval = 100, group = groupGeneral)
+
+groupTrend = "02 — Trend & Volatility"
+maType       = input.string("EMA", "Moving-average type", options = ["EMA", "SMA", "RMA", "WMA"], group = groupTrend)
+ma200Len     = input.int(200, "Primary MA length", minval = 2, group = groupTrend)
+ma2000Len    = input.int(2000, "Macro MA length", minval = 50, group = groupTrend)
+maSlopeBars  = input.int(5, "MA slope comparison bars", minval = 1, maxval = 50, group = groupTrend)
+showMAs      = input.bool(true, "Plot moving averages", group = groupTrend)
+bbLength     = input.int(20, "Bollinger length", minval = 2, group = groupTrend)
+bbMultiplier = input.float(2.0, "Bollinger deviation", minval = 0.1, step = 0.1, group = groupTrend)
+showBB       = input.bool(true, "Plot Bollinger Bands", group = groupTrend)
+atrLength    = input.int(14, "ATR length", minval = 2, group = groupTrend)
+
+groupHTF = "03 — Higher-Timeframe Filter"
+useHTF       = input.bool(true, "Use higher-timeframe trend", group = groupHTF)
+htfTimeframe = input.timeframe("60", "Higher timeframe", group = groupHTF)
+htfMaLength  = input.int(50, "HTF EMA length", minval = 2, group = groupHTF)
+
+groupStructure = "04 — Market Structure"
+showStructure  = input.bool(true, "Show BOS / CHoCH", group = groupStructure)
+swingLength    = input.int(3, "Swing pivot strength", minval = 1, maxval = 20, group = groupStructure)
+structureFresh = input.int(25, "Structure event freshness (bars)", minval = 2, maxval = 200, group = groupStructure)
+showSwingMarks = input.bool(false, "Show confirmed swing points", group = groupStructure)
+
+groupZones = "05 — FVG & Order Blocks"
+showFVG          = input.bool(true, "Show fair-value gaps", group = groupZones)
+fvgAtrMinimum    = input.float(0.08, "Minimum FVG size in ATR", minval = 0.0, step = 0.01, group = groupZones)
+maxFVGs          = input.int(25, "Maximum active FVGs", minval = 1, maxval = 100, group = groupZones)
+showOrderBlocks  = input.bool(true, "Show order blocks", group = groupZones)
+obLookback       = input.int(12, "Order-block candle search", minval = 2, maxval = 50, group = groupZones)
+obUseWicks       = input.bool(true, "Use full candle range for OB", group = groupZones)
+obInvalidation   = input.string("Close", "OB invalidation", options = ["Close", "Wick"], group = groupZones)
+maxOrderBlocks   = input.int(20, "Maximum active order blocks", minval = 1, maxval = 80, group = groupZones)
+
+groupLiquidity = "06 — Liquidity & Sessions"
+showLiquidityLabels = input.bool(true, "Show liquidity-sweep labels", group = groupLiquidity)
+liquidityFresh      = input.int(20, "Liquidity event freshness (bars)", minval = 2, maxval = 200, group = groupLiquidity)
+showSessions        = input.bool(true, "Plot session highs/lows", group = groupLiquidity)
+sessionTimezone     = input.string("Etc/UTC", "Session timezone", group = groupLiquidity, tooltip = "Examples: Etc/UTC, Africa/Nairobi, America/New_York")
+asiaSession         = input.session("0000-0800", "Asia session", group = groupLiquidity)
+londonSession       = input.session("0800-1300", "London session", group = groupLiquidity)
+newYorkSession      = input.session("1300-2100", "New York session", group = groupLiquidity)
+showPrevDay         = input.bool(true, "Plot previous-day high/low", group = groupLiquidity)
+showWeeklySituation = input.bool(true, "Show Monday–Wednesday–Thursday logic", group = groupLiquidity)
+
+groupVolume = "07 — Volume"
+useVolume         = input.bool(true, "Use relative volume", group = groupVolume)
+volumeLength      = input.int(20, "Volume average length", minval = 2, group = groupVolume)
+relativeVolumeMin = input.float(1.25, "High relative-volume threshold", minval = 0.1, step = 0.05, group = groupVolume)
+
+groupDXY = "08 — DXY Confirmation"
+useDXY       = input.bool(true, "Use inverse DXY confirmation", group = groupDXY)
+dxySymbol    = input.symbol("TVC:DXY", "DXY symbol", group = groupDXY)
+dxyTimeframe = input.timeframe("15", "DXY timeframe", group = groupDXY)
+dxyMaLength  = input.int(50, "DXY EMA length", minval = 2, group = groupDXY)
+dxyMomentum  = input.int(3, "DXY momentum bars", minval = 1, maxval = 50, group = groupDXY)
+
+groupAlerts = "09 — Alerts"
+enableDynamicAlerts = input.bool(true, "Enable dynamic alert() messages", group = groupAlerts)
+alertOnWatch        = input.bool(false, "Alert on reversal-watch signals", group = groupAlerts)
+
+// ============================================================================
+// 2. HELPERS
+// ============================================================================
+
+f_ma(float source, int length, string averageType) =>
+    switch averageType
+        "SMA" => ta.sma(source, length)
+        "RMA" => ta.rma(source, length)
+        "WMA" => ta.wma(source, length)
+        => ta.ema(source, length)
+
+f_recent(bool condition, int bars) =>
+    int since = ta.barssince(condition)
+    not na(since) and since <= bars
+
+f_last_opposite_offset(bool bullishBreak, int lookback) =>
+    int result = na
+    for i = 1 to lookback
+        bool opposite = bullishBreak ? close[i] < open[i] : close[i] > open[i]
+        if na(result) and opposite
+            result := i
+    result
+
+f_add_box(array<box> boxes, array<int> directions, box newBox, int direction, int maximum) =>
+    array.push(boxes, newBox)
+    array.push(directions, direction)
+    while array.size(boxes) > maximum
+        box oldBox = array.shift(boxes)
+        array.shift(directions)
+        box.delete(oldBox)
+
+f_add_line(array<line> lines, line newLine, int maximum) =>
+    array.push(lines, newLine)
+    while array.size(lines) > maximum
+        line oldLine = array.shift(lines)
+        line.delete(oldLine)
+
+f_price(float value) => str.tostring(value, format.mintick)
+
+f_score_color(int score, bool bullish) =>
+    score >= signalThreshold ? (bullish ? color.new(color.lime, 0) : color.new(color.red, 0)) :
+     score >= watchThreshold ? color.new(color.orange, 0) : color.new(color.gray, 30)
+
+// ============================================================================
+// 3. CORE TREND, BOLLINGER BANDS, ATR & VOLUME
+// ============================================================================
+
+ma200  = f_ma(close, ma200Len, maType)
+ma2000 = f_ma(close, ma2000Len, maType)
+atr    = ta.atr(atrLength)
+
+bbBasis = ta.sma(close, bbLength)
+bbDev   = ta.stdev(close, bbLength) * bbMultiplier
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+
+volumeAverage = ta.sma(volume, volumeLength)
+relativeVolume = volumeAverage > 0 ? volume / volumeAverage : na
+highRelativeVolume = not useVolume or (not na(relativeVolume) and relativeVolume >= relativeVolumeMin)
+
+pMa200  = plot(showMAs ? ma200 : na, "MA 200", color = color.new(color.red, 0), linewidth = 2)
+pMa2000 = plot(showMAs ? ma2000 : na, "MA 2000", color = color.new(color.aqua, 15), linewidth = 2)
+pBBU    = plot(showBB ? bbUpper : na, "BB Upper", color = color.new(color.teal, 35))
+pBBB    = plot(showBB ? bbBasis : na, "BB Basis", color = color.new(color.teal, 55))
+pBBL    = plot(showBB ? bbLower : na, "BB Lower", color = color.new(color.teal, 35))
+fill(pBBU, pBBL, color = showBB ? color.new(color.teal, 94) : na, title = "Bollinger fill")
+
+// Closed higher-timeframe values only, to avoid using an unfinished HTF candle.
+htfClose = request.security(syminfo.tickerid, htfTimeframe, close[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+htfEMA   = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, htfMaLength)[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+htfBull  = not useHTF or htfClose > htfEMA
+htfBear  = not useHTF or htfClose < htfEMA
+
+// DXY confirmation. Gold bullish setups prefer DXY weakness; gold bearish setups prefer DXY strength.
+dxyClose = request.security(dxySymbol, dxyTimeframe, close, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+dxyEMA   = request.security(dxySymbol, dxyTimeframe, ta.ema(close, dxyMaLength), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+dxyAvailable = not na(dxyClose) and not na(dxyEMA)
+dxyBull = dxyAvailable and dxyClose > dxyEMA and dxyClose > dxyClose[dxyMomentum]
+dxyBear = dxyAvailable and dxyClose < dxyEMA and dxyClose < dxyClose[dxyMomentum]
+dxyLongConfirm  = not useDXY or not dxyAvailable or dxyBear
+dxyShortConfirm = not useDXY or not dxyAvailable or dxyBull
+
+// ============================================================================
+// 4. CONFIRMED MARKET STRUCTURE — SWINGS, BOS & CHoCH
+// ============================================================================
+
+pivotHigh = ta.pivothigh(high, swingLength, swingLength)
+pivotLow  = ta.pivotlow(low, swingLength, swingLength)
+
+var float lastPivotHigh = na
+var float lastPivotLow  = na
+var int lastPivotHighBar = na
+var int lastPivotLowBar  = na
+var bool pivotHighBroken = false
+var bool pivotLowBroken  = false
+var int structureTrend = 0   // 1 bullish, -1 bearish, 0 undefined
+
+if not na(pivotHigh)
+    lastPivotHigh := pivotHigh
+    lastPivotHighBar := bar_index - swingLength
+    pivotHighBroken := false
+
+if not na(pivotLow)
+    lastPivotLow := pivotLow
+    lastPivotLowBar := bar_index - swingLength
+    pivotLowBroken := false
+
+bool confirmationGate = not confirmedOnly or barstate.isconfirmed
+
+bullBreak = confirmationGate and not na(lastPivotHigh) and not pivotHighBroken and close > lastPivotHigh
+bearBreak = confirmationGate and not na(lastPivotLow) and not pivotLowBroken and close < lastPivotLow
+
+bullCHoCH = bullBreak and structureTrend == -1
+bearCHoCH = bearBreak and structureTrend == 1
+bullBOS   = bullBreak and not bullCHoCH
+bearBOS   = bearBreak and not bearCHoCH
+
+var array<line> structureLines = array.new<line>()
+
+if bullBreak
+    pivotHighBroken := true
+    if showStructure and not na(lastPivotHighBar)
+        line breakLine = line.new(x1 = lastPivotHighBar, y1 = lastPivotHigh, x2 = bar_index, y2 = lastPivotHigh,
+             xloc = xloc.bar_index, color = bullCHoCH ? color.yellow : color.lime,
+             style = bullCHoCH ? line.style_dashed : line.style_solid, width = 1)
+        f_add_line(structureLines, breakLine, 80)
+        label.new(bar_index, lastPivotHigh, bullCHoCH ? "CHoCH ↑" : "BOS ↑",
+             style = label.style_label_up, color = bullCHoCH ? color.yellow : color.lime,
+             textcolor = color.black, size = size.tiny)
+    structureTrend := 1
+
+if bearBreak
+    pivotLowBroken := true
+    if showStructure and not na(lastPivotLowBar)
+        line breakLine = line.new(x1 = lastPivotLowBar, y1 = lastPivotLow, x2 = bar_index, y2 = lastPivotLow,
+             xloc = xloc.bar_index, color = bearCHoCH ? color.yellow : color.red,
+             style = bearCHoCH ? line.style_dashed : line.style_solid, width = 1)
+        f_add_line(structureLines, breakLine, 80)
+        label.new(bar_index, lastPivotLow, bearCHoCH ? "CHoCH ↓" : "BOS ↓",
+             style = label.style_label_down, color = bearCHoCH ? color.yellow : color.red,
+             textcolor = color.white, size = size.tiny)
+    structureTrend := -1
+
+plotshape(showSwingMarks and not na(pivotHigh), title = "Confirmed swing high", style = shape.triangledown,
+     location = location.abovebar, offset = -swingLength, color = color.new(color.red, 15), size = size.tiny)
+plotshape(showSwingMarks and not na(pivotLow), title = "Confirmed swing low", style = shape.triangleup,
+     location = location.belowbar, offset = -swingLength, color = color.new(color.lime, 15), size = size.tiny)
+
+// ============================================================================
+// 5. FAIR-VALUE GAPS
+// ============================================================================
+
+var array<box> fvgBoxes = array.new<box>()
+var array<int> fvgDirections = array.new<int>()
+
+bullFVG = showFVG and confirmationGate and bar_index >= 2 and low > high[2] and (low - high[2]) >= atr * fvgAtrMinimum
+bearFVG = showFVG and confirmationGate and bar_index >= 2 and high < low[2] and (low[2] - high) >= atr * fvgAtrMinimum
+
+if bullFVG
+    box newFVG = box.new(left = bar_index - 2, top = low, right = bar_index, bottom = high[2],
+         xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.lime, 45),
+         bgcolor = color.new(color.lime, 87), text = "FVG", text_color = color.new(color.lime, 10), text_size = size.tiny)
+    f_add_box(fvgBoxes, fvgDirections, newFVG, 1, maxFVGs)
+
+if bearFVG
+    box newFVG = box.new(left = bar_index - 2, top = low[2], right = bar_index, bottom = high,
+         xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.red, 45),
+         bgcolor = color.new(color.red, 87), text = "FVG", text_color = color.new(color.red, 5), text_size = size.tiny)
+    f_add_box(fvgBoxes, fvgDirections, newFVG, -1, maxFVGs)
+
+int fvgIndex = array.size(fvgBoxes) - 1
+while fvgIndex >= 0
+    box activeFVG = array.get(fvgBoxes, fvgIndex)
+    int direction = array.get(fvgDirections, fvgIndex)
+    float zoneTop = box.get_top(activeFVG)
+    float zoneBottom = box.get_bottom(activeFVG)
+    bool fullyFilled = direction == 1 ? low <= zoneBottom : high >= zoneTop
+    bool partiallyTouched = direction == 1 ? low < zoneTop : high > zoneBottom
+    if fullyFilled
+        box.delete(activeFVG)
+        array.remove(fvgBoxes, fvgIndex)
+        array.remove(fvgDirections, fvgIndex)
+    else if partiallyTouched
+        box.set_bgcolor(activeFVG, direction == 1 ? color.new(color.lime, 92) : color.new(color.red, 92))
+    fvgIndex -= 1
+
+// ============================================================================
+// 6. ORDER BLOCKS — LAST OPPOSITE CANDLE BEFORE CONFIRMED STRUCTURE BREAK
+// ============================================================================
+
+var array<box> obBoxes = array.new<box>()
+var array<int> obDirections = array.new<int>()
+
+if showOrderBlocks and bullBreak
+    int obOffset = f_last_opposite_offset(true, obLookback)
+    if not na(obOffset)
+        float obTop = obUseWicks ? high[obOffset] : math.max(open[obOffset], close[obOffset])
+        float obBottom = obUseWicks ? low[obOffset] : math.min(open[obOffset], close[obOffset])
+        box newOB = box.new(left = bar_index - obOffset, top = obTop, right = bar_index, bottom = obBottom,
+             xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.green, 30),
+             bgcolor = color.new(color.green, 85), text = "Bull OB", text_color = color.new(color.lime, 0), text_size = size.tiny)
+        f_add_box(obBoxes, obDirections, newOB, 1, maxOrderBlocks)
+
+if showOrderBlocks and bearBreak
+    int obOffset = f_last_opposite_offset(false, obLookback)
+    if not na(obOffset)
+        float obTop = obUseWicks ? high[obOffset] : math.max(open[obOffset], close[obOffset])
+        float obBottom = obUseWicks ? low[obOffset] : math.min(open[obOffset], close[obOffset])
+        box newOB = box.new(left = bar_index - obOffset, top = obTop, right = bar_index, bottom = obBottom,
+             xloc = xloc.bar_index, extend = extend.right, border_color = color.new(color.maroon, 20),
+             bgcolor = color.new(color.red, 85), text = "Bear OB", text_color = color.new(color.red, 0), text_size = size.tiny)
+        f_add_box(obBoxes, obDirections, newOB, -1, maxOrderBlocks)
+
+int obIndex = array.size(obBoxes) - 1
+while obIndex >= 0
+    box activeOB = array.get(obBoxes, obIndex)
+    int direction = array.get(obDirections, obIndex)
+    float zoneTop = box.get_top(activeOB)
+    float zoneBottom = box.get_bottom(activeOB)
+    bool invalidated = direction == 1 ?
+         (obInvalidation == "Close" ? close < zoneBottom : low < zoneBottom) :
+         (obInvalidation == "Close" ? close > zoneTop : high > zoneTop)
+    if invalidated
+        box.delete(activeOB)
+        array.remove(obBoxes, obIndex)
+        array.remove(obDirections, obIndex)
+    obIndex -= 1
+
+// Determine whether current price is inside an active zone.
+bool inBullFVG = false
+bool inBearFVG = false
+int fvgCheck = 0
+while fvgCheck < array.size(fvgBoxes)
+    box checkedFVG = array.get(fvgBoxes, fvgCheck)
+    int checkedDirection = array.get(fvgDirections, fvgCheck)
+    bool inside = high >= box.get_bottom(checkedFVG) and low <= box.get_top(checkedFVG)
+    inBullFVG := inBullFVG or (inside and checkedDirection == 1)
+    inBearFVG := inBearFVG or (inside and checkedDirection == -1)
+    fvgCheck += 1
+
+bool inBullOB = false
+bool inBearOB = false
+int obCheck = 0
+while obCheck < array.size(obBoxes)
+    box checkedOB = array.get(obBoxes, obCheck)
+    int checkedDirection = array.get(obDirections, obCheck)
+    bool inside = high >= box.get_bottom(checkedOB) and low <= box.get_top(checkedOB)
+    inBullOB := inBullOB or (inside and checkedDirection == 1)
+    inBearOB := inBearOB or (inside and checkedDirection == -1)
+    obCheck += 1
+
+// ============================================================================
+// 7. SESSION RANGES & PREVIOUS DAY
+// ============================================================================
+
+inAsia   = not na(time(timeframe.period, asiaSession, sessionTimezone))
+inLondon = not na(time(timeframe.period, londonSession, sessionTimezone))
+inNewYork = not na(time(timeframe.period, newYorkSession, sessionTimezone))
+
+var float asiaHigh = na
+var float asiaLow = na
+var float londonHigh = na
+var float londonLow = na
+var float newYorkHigh = na
+var float newYorkLow = na
+
+newAsia = inAsia and not inAsia[1]
+newLondon = inLondon and not inLondon[1]
+newNewYork = inNewYork and not inNewYork[1]
+
+if newAsia
+    asiaHigh := high
+    asiaLow := low
+else if inAsia
+    asiaHigh := math.max(nz(asiaHigh, high), high)
+    asiaLow := math.min(nz(asiaLow, low), low)
+
+if newLondon
+    londonHigh := high
+    londonLow := low
+else if inLondon
+    londonHigh := math.max(nz(londonHigh, high), high)
+    londonLow := math.min(nz(londonLow, low), low)
+
+if newNewYork
+    newYorkHigh := high
+    newYorkLow := low
+else if inNewYork
+    newYorkHigh := math.max(nz(newYorkHigh, high), high)
+    newYorkLow := math.min(nz(newYorkLow, low), low)
+
+plot(showSessions ? asiaHigh : na, "Asia High", color = color.new(color.blue, 15), style = plot.style_linebr)
+plot(showSessions ? asiaLow : na, "Asia Low", color = color.new(color.blue, 15), style = plot.style_linebr)
+plot(showSessions ? londonHigh : na, "London High", color = color.new(color.orange, 25), style = plot.style_linebr)
+plot(showSessions ? londonLow : na, "London Low", color = color.new(color.orange, 25), style = plot.style_linebr)
+plot(showSessions ? newYorkHigh : na, "New York High", color = color.new(color.purple, 25), style = plot.style_linebr)
+plot(showSessions ? newYorkLow : na, "New York Low", color = color.new(color.purple, 25), style = plot.style_linebr)
+
+previousDayHigh = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+previousDayLow  = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+plot(showPrevDay ? previousDayHigh : na, "Previous Day High", color = color.new(color.fuchsia, 25), linewidth = 1, style = plot.style_linebr)
+plot(showPrevDay ? previousDayLow : na, "Previous Day Low", color = color.new(color.fuchsia, 25), linewidth = 1, style = plot.style_linebr)
+
+// ============================================================================
+// 8. LIQUIDITY SWEEPS
+// ============================================================================
+
+bullSwingSweep = confirmationGate and not na(lastPivotLow) and low < lastPivotLow and close > lastPivotLow
+bearSwingSweep = confirmationGate and not na(lastPivotHigh) and high > lastPivotHigh and close < lastPivotHigh
+
+bullAsiaSweep = confirmationGate and not inAsia and not na(asiaLow) and low < asiaLow and close > asiaLow
+bearAsiaSweep = confirmationGate and not inAsia and not na(asiaHigh) and high > asiaHigh and close < asiaHigh
+bullPDLSweep  = confirmationGate and low < previousDayLow and close > previousDayLow
+bearPDHSweep  = confirmationGate and high > previousDayHigh and close < previousDayHigh
+
+bullLiquiditySweep = bullSwingSweep or bullAsiaSweep or bullPDLSweep
+bearLiquiditySweep = bearSwingSweep or bearAsiaSweep or bearPDHSweep
+
+if showLiquidityLabels and bullLiquiditySweep
+    label.new(bar_index, low, "Sell-side sweep\nREVERSAL WATCH", style = label.style_label_up,
+         color = color.new(color.lime, 5), textcolor = color.black, size = size.tiny)
+
+if showLiquidityLabels and bearLiquiditySweep
+    label.new(bar_index, high, "Buy-side sweep\nREVERSAL WATCH", style = label.style_label_down,
+         color = color.new(color.red, 5), textcolor = color.white, size = size.tiny)
+
+// ============================================================================
+// 9. MONDAY–WEDNESDAY–THURSDAY / THURSDAY–FRIDAY SITUATIONAL LOGIC
+// ============================================================================
+
+newDay = ta.change(time("D")) != 0
+
+var float mondayHigh = na
+var float mondayLow = na
+var float wednesdayHigh = na
+var float wednesdayLow = na
+var float thursdayHigh = na
+var float thursdayLow = na
+var float fridayHigh = na
+var float fridayLow = na
+
+var float previousThursdayHigh = na
+var float previousFridayHigh = na
+var float previousFridayLow = na
+
+if newDay and dayofweek == dayofweek.monday
+    previousThursdayHigh := thursdayHigh
+    previousFridayHigh := fridayHigh
+    previousFridayLow := fridayLow
+    mondayHigh := na
+    mondayLow := na
+    wednesdayHigh := na
+    wednesdayLow := na
+    thursdayHigh := na
+    thursdayLow := na
+    fridayHigh := na
+    fridayLow := na
+
+if dayofweek == dayofweek.monday
+    mondayHigh := na(mondayHigh) ? high : math.max(mondayHigh, high)
+    mondayLow := na(mondayLow) ? low : math.min(mondayLow, low)
+
+if dayofweek == dayofweek.wednesday
+    wednesdayHigh := na(wednesdayHigh) ? high : math.max(wednesdayHigh, high)
+    wednesdayLow := na(wednesdayLow) ? low : math.min(wednesdayLow, low)
+
+if dayofweek == dayofweek.thursday
+    thursdayHigh := na(thursdayHigh) ? high : math.max(thursdayHigh, high)
+    thursdayLow := na(thursdayLow) ? low : math.min(thursdayLow, low)
+
+if dayofweek == dayofweek.friday
+    fridayHigh := na(fridayHigh) ? high : math.max(fridayHigh, high)
+    fridayLow := na(fridayLow) ? low : math.min(fridayLow, low)
+
+bool thursdayMondayLowMagnet = showWeeklySituation and dayofweek == dayofweek.thursday and not na(mondayHigh) and not na(wednesdayHigh) and mondayHigh > wednesdayHigh
+bool mondayFridayLowMagnet = showWeeklySituation and dayofweek == dayofweek.monday and not na(previousThursdayHigh) and not na(previousFridayHigh) and previousThursdayHigh > previousFridayHigh
+
+float situationalTarget = thursdayMondayLowMagnet ? mondayLow : mondayFridayLowMagnet ? previousFridayLow : na
+plot(showWeeklySituation ? situationalTarget : na, "Situational liquidity target", color = color.new(color.yellow, 0), linewidth = 2, style = plot.style_linebr)
+
+string weeklyContext = "Collecting weekly data"
+if not na(mondayHigh) and not na(wednesdayHigh)
+    weeklyContext := mondayHigh > wednesdayHigh ? "Mon H > Wed H → Thu Mon-Low magnet" : "Mon H < Wed H → continuation bias"
+if mondayFridayLowMagnet
+    weeklyContext := "Prev Thu H > Fri H → Mon Fri-Low magnet"
+else if dayofweek == dayofweek.monday and not na(previousThursdayHigh) and not na(previousFridayHigh) and previousThursdayHigh < previousFridayHigh
+    weeklyContext := "Prev Thu H < Fri H → continuation bias"
+
+// ============================================================================
+// 10. CONFLUENCE SCORING — 100 POINTS
+// ============================================================================
+
+// Trend: 20
+int longTrendScore = (close > ma200 ? 6 : 0) + (close > ma2000 ? 6 : 0) + (ma200 > ma200[maSlopeBars] ? 4 : 0) + (htfBull ? 4 : 0)
+int shortTrendScore = (close < ma200 ? 6 : 0) + (close < ma2000 ? 6 : 0) + (ma200 < ma200[maSlopeBars] ? 4 : 0) + (htfBear ? 4 : 0)
+
+// Structure: 20
+bool recentBullBreak = f_recent(bullBreak, structureFresh)
+bool recentBearBreak = f_recent(bearBreak, structureFresh)
+bool recentBullCHoCH = f_recent(bullCHoCH, structureFresh)
+bool recentBearCHoCH = f_recent(bearCHoCH, structureFresh)
+int longStructureScore = (structureTrend == 1 ? 10 : 0) + (recentBullBreak ? 5 : 0) + (recentBullCHoCH ? 5 : 0)
+int shortStructureScore = (structureTrend == -1 ? 10 : 0) + (recentBearBreak ? 5 : 0) + (recentBearCHoCH ? 5 : 0)
+
+// Liquidity: 20
+bool recentBullSweep = f_recent(bullLiquiditySweep, liquidityFresh)
+bool recentBearSweep = f_recent(bearLiquiditySweep, liquidityFresh)
+bool recentBullAsiaSweep = f_recent(bullAsiaSweep, liquidityFresh)
+bool recentBearAsiaSweep = f_recent(bearAsiaSweep, liquidityFresh)
+bool recentBullPDLSweep = f_recent(bullPDLSweep, liquidityFresh)
+bool recentBearPDHSweep = f_recent(bearPDHSweep, liquidityFresh)
+int longLiquidityScore = (recentBullSweep ? 12 : 0) + (recentBullAsiaSweep ? 4 : 0) + (recentBullPDLSweep ? 4 : 0)
+int shortLiquidityScore = (recentBearSweep ? 12 : 0) + (recentBearAsiaSweep ? 4 : 0) + (recentBearPDHSweep ? 4 : 0)
+
+// Zones: 15
+bool nearMA200 = math.abs(close - ma200) <= atr * 0.35
+int longZoneScore = (inBullOB ? 6 : 0) + (inBullFVG ? 5 : 0) + ((nearMA200 or low <= bbLower) ? 4 : 0)
+int shortZoneScore = (inBearOB ? 6 : 0) + (inBearFVG ? 5 : 0) + ((nearMA200 or high >= bbUpper) ? 4 : 0)
+
+// Bollinger behaviour: 10
+bool bullBandReentry = low < bbLower and close > bbLower
+bool bearBandReentry = high > bbUpper and close < bbUpper
+int longBBScore = (bullBandReentry ? 6 : 0) + (close > bbBasis ? 4 : 0)
+int shortBBScore = (bearBandReentry ? 6 : 0) + (close < bbBasis ? 4 : 0)
+
+// Volume and displacement: 10
+float bodySize = math.abs(close - open)
+bool bullishDisplacement = close > open and bodySize >= atr * 0.45
+bool bearishDisplacement = close < open and bodySize >= atr * 0.45
+int longVolumeScore = (highRelativeVolume ? 6 : 0) + (bullishDisplacement ? 4 : 0)
+int shortVolumeScore = (highRelativeVolume ? 6 : 0) + (bearishDisplacement ? 4 : 0)
+
+// DXY: 5
+int longDXYScore = dxyLongConfirm ? 5 : 0
+int shortDXYScore = dxyShortConfirm ? 5 : 0
+
+int longScore = math.min(100, longTrendScore + longStructureScore + longLiquidityScore + longZoneScore + longBBScore + longVolumeScore + longDXYScore)
+int shortScore = math.min(100, shortTrendScore + shortStructureScore + shortLiquidityScore + shortZoneScore + shortBBScore + shortVolumeScore + shortDXYScore)
+
+// ============================================================================
+// 11. REVERSAL WATCHES & CONFIRMED SIGNALS
+// ============================================================================
+
+bool longWatchRaw = confirmationGate and bullLiquiditySweep and longScore >= watchThreshold and longScore > shortScore
+bool shortWatchRaw = confirmationGate and bearLiquiditySweep and shortScore >= watchThreshold and shortScore > longScore
+
+// Confirmation requires strong score plus a recent structural shift/break and directional advantage.
+bool longSignalRaw = confirmationGate and longScore >= signalThreshold and longScore >= shortScore + minimumScoreEdge and
+     (recentBullCHoCH or recentBullBreak) and (close > bbBasis or bullishDisplacement)
+
+bool shortSignalRaw = confirmationGate and shortScore >= signalThreshold and shortScore >= longScore + minimumScoreEdge and
+     (recentBearCHoCH or recentBearBreak) and (close < bbBasis or bearishDisplacement)
+
+var int lastLongSignalBar = na
+var int lastShortSignalBar = na
+
+longSignal = longSignalRaw and (na(lastLongSignalBar) or bar_index - lastLongSignalBar >= signalCooldownBars)
+shortSignal = shortSignalRaw and (na(lastShortSignalBar) or bar_index - lastShortSignalBar >= signalCooldownBars)
+
+if longSignal
+    lastLongSignalBar := bar_index
+    if showSignalLabels
+        label.new(bar_index, low, "CONFIRMED BUY\n" + str.tostring(longScore) + " / 100",
+             style = label.style_label_up, color = color.new(color.lime, 0), textcolor = color.black, size = size.small)
+
+if shortSignal
+    lastShortSignalBar := bar_index
+    if showSignalLabels
+        label.new(bar_index, high, "CONFIRMED SELL\n" + str.tostring(shortScore) + " / 100",
+             style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+
+plotshape(longWatchRaw and not longSignal, title = "Bullish reversal watch", text = "WATCH", style = shape.labelup,
+     location = location.belowbar, color = color.new(color.orange, 10), textcolor = color.black, size = size.tiny)
+plotshape(shortWatchRaw and not shortSignal, title = "Bearish reversal watch", text = "WATCH", style = shape.labeldown,
+     location = location.abovebar, color = color.new(color.orange, 10), textcolor = color.black, size = size.tiny)
+
+barcolor(paintBars ? (longScore >= shortScore + minimumScoreEdge ? color.new(color.lime, 45) : shortScore >= longScore + minimumScoreEdge ? color.new(color.red, 45) : na) : na)
+
+// Hidden score plots make values accessible in the Data Window and alert placeholders.
+plot(longScore, "Long Score", display = display.none)
+plot(shortScore, "Short Score", display = display.none)
+plot(relativeVolume, "Relative Volume", display = display.none)
+
+// ============================================================================
+// 12. DASHBOARD
+// ============================================================================
+
+string dashboardPos = switch dashboardPosition
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left" => position.bottom_left
+    => position.top_right
+
+var table dashboard = table.new(dashboardPos, 2, 12, border_width = 1, frame_color = color.new(color.gray, 40), border_color = color.new(color.gray, 70))
+
+string regime = longTrendScore >= 15 and longTrendScore > shortTrendScore ? "Bullish" : shortTrendScore >= 15 and shortTrendScore > longTrendScore ? "Bearish" : "Range / mixed"
+string structureText = structureTrend == 1 ? "Bullish" : structureTrend == -1 ? "Bearish" : "Undefined"
+string dxyText = not useDXY ? "Disabled" : not dxyAvailable ? "Unavailable" : dxyBull ? "Bullish (gold headwind)" : dxyBear ? "Bearish (gold support)" : "Neutral"
+string sessionText = inAsia ? "Asia" : inLondon ? "London" : inNewYork ? "New York" : "Between sessions"
+string zoneText = inBullOB ? "Inside Bull OB" : inBearOB ? "Inside Bear OB" : inBullFVG ? "Inside Bull FVG" : inBearFVG ? "Inside Bear FVG" : "No active zone"
+string activeSignal = longSignal ? "CONFIRMED BUY" : shortSignal ? "CONFIRMED SELL" : longWatchRaw ? "Bull reversal watch" : shortWatchRaw ? "Bear reversal watch" : "Wait"
+color signalColor = longSignal ? color.lime : shortSignal ? color.red : (longWatchRaw or shortWatchRaw) ? color.orange : color.silver
+
+if barstate.islast and showDashboard
+    table.cell(dashboard, 0, 0, "BG GOLD SRE", bgcolor = color.new(color.black, 0), text_color = color.white, text_size = size.small)
+    table.cell(dashboard, 1, 0, "barucci_goon", bgcolor = color.new(color.black, 0), text_color = color.aqua, text_size = size.small)
+    table.cell(dashboard, 0, 1, "Regime", text_color = color.silver)
+    table.cell(dashboard, 1, 1, regime, text_color = regime == "Bullish" ? color.lime : regime == "Bearish" ? color.red : color.orange)
+    table.cell(dashboard, 0, 2, "Structure", text_color = color.silver)
+    table.cell(dashboard, 1, 2, structureText, text_color = structureTrend == 1 ? color.lime : structureTrend == -1 ? color.red : color.orange)
+    table.cell(dashboard, 0, 3, "Long score", text_color = color.silver)
+    table.cell(dashboard, 1, 3, str.tostring(longScore) + " / 100", text_color = f_score_color(longScore, true))
+    table.cell(dashboard, 0, 4, "Short score", text_color = color.silver)
+    table.cell(dashboard, 1, 4, str.tostring(shortScore) + " / 100", text_color = f_score_color(shortScore, false))
+    table.cell(dashboard, 0, 5, "DXY", text_color = color.silver)
+    table.cell(dashboard, 1, 5, dxyText, text_color = dxyBear ? color.lime : dxyBull ? color.red : color.orange)
+    table.cell(dashboard, 0, 6, "RVOL", text_color = color.silver)
+    table.cell(dashboard, 1, 6, na(relativeVolume) ? "n/a" : str.tostring(relativeVolume, "#.00") + "×", text_color = highRelativeVolume ? color.aqua : color.silver)
+    table.cell(dashboard, 0, 7, "Session", text_color = color.silver)
+    table.cell(dashboard, 1, 7, sessionText, text_color = color.white)
+    table.cell(dashboard, 0, 8, "Location", text_color = color.silver)
+    table.cell(dashboard, 1, 8, zoneText, text_color = color.white)
+    table.cell(dashboard, 0, 9, "Weekly situation", text_color = color.silver)
+    table.cell(dashboard, 1, 9, weeklyContext, text_color = color.yellow, text_size = size.tiny)
+    table.cell(dashboard, 0, 10, "Target / magnet", text_color = color.silver)
+    table.cell(dashboard, 1, 10, na(situationalTarget) ? "None" : f_price(situationalTarget), text_color = color.yellow)
+    table.cell(dashboard, 0, 11, "Current call", bgcolor = color.new(signalColor, 80), text_color = color.white)
+    table.cell(dashboard, 1, 11, activeSignal, bgcolor = color.new(signalColor, 80), text_color = signalColor)
+
+if barstate.islast and not showDashboard
+    table.clear(dashboard, 0, 0, 1, 11)
+
+// ============================================================================
+// 13. ALERTS
+// ============================================================================
+
+alertcondition(longSignal, "BG Gold SRE — Confirmed BUY", "Confirmed BUY on {{ticker}}. Open the chart for score, structure and invalidation context.")
+alertcondition(shortSignal, "BG Gold SRE — Confirmed SELL", "Confirmed SELL on {{ticker}}. Open the chart for score, structure and invalidation context.")
+alertcondition(longWatchRaw, "BG Gold SRE — Bullish reversal watch", "Sell-side liquidity sweep detected on {{ticker}}. Wait for bullish structural confirmation.")
+alertcondition(shortWatchRaw, "BG Gold SRE — Bearish reversal watch", "Buy-side liquidity sweep detected on {{ticker}}. Wait for bearish structural confirmation.")
+alertcondition(bullBreak, "BG Gold SRE — Bullish BOS/CHoCH", "Bullish structure break on {{ticker}}.")
+alertcondition(bearBreak, "BG Gold SRE — Bearish BOS/CHoCH", "Bearish structure break on {{ticker}}.")
+alertcondition(bullFVG, "BG Gold SRE — New bullish FVG", "New bullish fair-value gap on {{ticker}}.")
+alertcondition(bearFVG, "BG Gold SRE — New bearish FVG", "New bearish fair-value gap on {{ticker}}.")
+
+if enableDynamicAlerts and longSignal
+    alert("BG GOLD SRE | CONFIRMED BUY | " + syminfo.ticker + " | Price " + f_price(close) + " | Long score " + str.tostring(longScore) + "/100 | Short score " + str.tostring(shortScore) + "/100", alert.freq_once_per_bar_close)
+
+if enableDynamicAlerts and shortSignal
+    alert("BG GOLD SRE | CONFIRMED SELL | " + syminfo.ticker + " | Price " + f_price(close) + " | Short score " + str.tostring(shortScore) + "/100 | Long score " + str.tostring(longScore) + "/100", alert.freq_once_per_bar_close)
+
+if enableDynamicAlerts and alertOnWatch and longWatchRaw and not longSignal
+    alert("BG GOLD SRE | BULLISH REVERSAL WATCH | " + syminfo.ticker + " | Sell-side sweep at " + f_price(close) + " | Wait for BOS/CHoCH confirmation", alert.freq_once_per_bar_close)
+
+if enableDynamicAlerts and alertOnWatch and shortWatchRaw and not shortSignal
+    alert("BG GOLD SRE | BEARISH REVERSAL WATCH | " + syminfo.ticker + " | Buy-side sweep at " + f_price(close) + " | Wait for BOS/CHoCH confirmation", alert.freq_once_per_bar_close)
