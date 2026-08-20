@@ -1,0 +1,2637 @@
+//@version=6
+// Gold Structure & Reversal Engine v9.0 — Adaptive Learning M15 Sniper
+// Creator: barucci_goon
+// Foundation: Preserves the proven core confluence engine and v2 SMC/Fibonacci/SMT gates.
+// Upgrade: Preserves the complete v8 engine and adds a bounded adaptive-learning layer:
+//          The v5-style early M15 arm candle remains untouched; learning never moves the original setup location.
+//          Historical armed setups are evaluated bar-by-bar against T1 or a chosen R-multiple before invalidation.
+//          The engine learns separately by side, regime, session, individual confluences and exact 10-feature setup signature.
+//          Bayesian smoothing + bounded score adjustment prevents small samples from hijacking the proven v8 rules.
+//          Liquidity, structure, SMC, Fib, SMT, nested BB, HTF, fast MA, volume and weekly profile remain the causal engine.
+//          Learning only adjusts confidence/final sniper quality after enough resolved samples; Advisory mode leaves signals unchanged.
+// Notes: No indicator can guarantee a perfect entry. Final signals use closed-bar confirmation by default.
+
+indicator(
+     "Gold Structure & Reversal Engine v9 [barucci_goon]",
+     shorttitle = "BGGSREv9",
+     overlay = true,
+     max_bars_back = 5000,
+     max_labels_count = 500,
+     max_lines_count = 500,
+     max_boxes_count = 500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+
+groupGeneral = "01 — General & Display"
+displayMode        = input.string("Minimal", "Chart display mode", options = ["Minimal", "Standard", "Full Analysis"], group = groupGeneral, tooltip = "Minimal shows execution MAs, MA200, active objective and final signals. Standard adds bands, sessions and Fibonacci. Full Analysis shows historical structure and zones.")
+showDashboard      = input.bool(true, "Show intelligence dashboard", group = groupGeneral)
+dashboardPosition  = input.string("Top Right", "Dashboard position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = groupGeneral)
+confirmedOnly      = input.bool(true, "Final signals only after candle close", group = groupGeneral, tooltip = "Recommended. Prevents intrabar signal flicker.")
+paintBars          = input.bool(false, "Color bars by dominant core score", group = groupGeneral)
+showSignalLabels   = input.bool(true, "Show final BUY/SELL labels", group = groupGeneral)
+showEarlyLabels    = input.bool(true, "Show early reversal warnings", group = groupGeneral)
+showWaitingLabels  = input.bool(true, "Show setup-waiting labels", group = groupGeneral)
+showDecisionMilestones = input.bool(true, "Show setup/sweep/LTF milestone labels", group = groupGeneral, tooltip = "Keeps an audit trail of the armed candle, liquidity sweep, M3/M5 validation and target reaction. Historical labels are retained until the configured cap is exceeded.")
+maxSignalLabels    = input.int(30, "Maximum retained signal labels", minval = 3, maxval = 150, group = groupGeneral, tooltip = "v8 default is v7 limit + 50%: 20 + 10 = 30. Labels are only removed when this retention cap is exceeded.")
+signalThreshold    = input.int(72, "Core confirmed-signal threshold", minval = 50, maxval = 95, group = groupGeneral)
+watchThreshold     = input.int(58, "Core reversal-watch threshold", minval = 40, maxval = 90, group = groupGeneral)
+minimumScoreEdge   = input.int(8, "Minimum core-score advantage", minval = 0, maxval = 30, group = groupGeneral)
+signalCooldownBars = input.int(8, "Final signal cooldown bars", minval = 1, maxval = 100, group = groupGeneral)
+
+groupTrend = "02 — Core Trend, Volatility & MA Regime"
+maType       = input.string("EMA", "MA200/MA2000 type", options = ["EMA", "SMA", "RMA", "WMA"], group = groupTrend)
+ma200Len     = input.int(200, "Primary MA length", minval = 2, group = groupTrend)
+ma2000Len    = input.int(2000, "Macro MA length", minval = 50, group = groupTrend)
+maSlopeBars  = input.int(5, "Primary MA slope bars", minval = 1, maxval = 50, group = groupTrend)
+ema20Len     = input.int(20, "Pullback EMA length", minval = 2, group = groupTrend)
+ema50Len     = input.int(50, "Intraday EMA length", minval = 2, group = groupTrend)
+bbLength     = input.int(20, "Bollinger length", minval = 2, group = groupTrend)
+bbMultiplier = input.float(2.0, "Bollinger deviation", minval = 0.1, step = 0.1, group = groupTrend)
+atrLength    = input.int(14, "ATR length", minval = 2, group = groupTrend)
+
+groupFastMA = "03 — 5 WMA / 9 EMA Execution Intelligence"
+useFastMATrigger      = input.bool(true, "Require fast-MA execution trigger", group = groupFastMA)
+wmaFastLen            = input.int(5, "Fast WMA length", minval = 2, maxval = 50, group = groupFastMA)
+emaTriggerLen         = input.int(9, "Trigger EMA length", minval = 2, maxval = 100, group = groupFastMA)
+fastSlopeBars         = input.int(3, "Fast-MA slope bars", minval = 1, maxval = 20, group = groupFastMA)
+minimumSlopeAtr       = input.float(0.015, "Minimum normalized slope", minval = 0.0, maxval = 0.5, step = 0.005, group = groupFastMA)
+flatSlopeAtr          = input.float(0.010, "WMA exhaustion/flat threshold", minval = 0.0, maxval = 0.2, step = 0.005, group = groupFastMA)
+minimumFanAtr         = input.float(0.025, "Minimum WMA/EMA separation in ATR", minval = 0.0, maxval = 0.5, step = 0.005, group = groupFastMA)
+fastTriggerFreshBars  = input.int(8, "Fast cross freshness bars", minval = 1, maxval = 50, group = groupFastMA)
+retestWindowBars      = input.int(8, "9 EMA retest window", minval = 1, maxval = 50, group = groupFastMA)
+retestToleranceAtr    = input.float(0.12, "9 EMA retest tolerance in ATR", minval = 0.0, maxval = 1.0, step = 0.02, group = groupFastMA)
+entryTriggerMode      = input.string("Retest", "Final fast-MA trigger", options = ["Close", "Retest", "Either"], group = groupFastMA, tooltip = "Close enters after the momentum-wrap candle. Retest waits for the first valid 9 EMA retest. Either accepts both.")
+requireFanExpansion   = input.bool(true, "Require MA fan-out/expansion", group = groupFastMA)
+requireClearCandle    = input.bool(true, "Require candle completely beyond 9 EMA", group = groupFastMA)
+
+groupHTF = "04 — Higher-Timeframe Filter"
+useHTF       = input.bool(true, "Use higher-timeframe trend", group = groupHTF)
+htfTimeframe = input.timeframe("60", "Legacy higher timeframe", group = groupHTF)
+htfMaLength  = input.int(50, "Legacy HTF EMA length", minval = 2, group = groupHTF)
+
+groupCascade = "04B — D1 / H4 / H2 / H1 Direction Cascade"
+useMTFCascade       = input.bool(true, "Use full higher-timeframe cascade", group = groupCascade)
+dailyTimeframe      = input.timeframe("D", "Macro timeframe", group = groupCascade)
+h4Timeframe         = input.timeframe("240", "Market-cycle timeframe", group = groupCascade)
+h2Timeframe         = input.timeframe("120", "Bridge timeframe", group = groupCascade)
+h1Timeframe         = input.timeframe("60", "Setup timeframe", group = groupCascade)
+mtfStructureLookback = input.int(6, "HTF structure lookback", minval = 2, maxval = 30, group = groupCascade)
+mtfSlopeBars        = input.int(2, "HTF Bollinger/EMA slope bars", minval = 1, maxval = 10, group = groupCascade)
+mtfSqueezeRatio     = input.float(0.90, "HTF squeeze width ratio", minval = 0.5, maxval = 1.1, step = 0.02, group = groupCascade)
+mtfMinimumScore     = input.int(70, "Minimum HTF alignment score", minval = 40, maxval = 95, group = groupCascade)
+minimumTargetRoomAtr = input.float(1.25, "Minimum room to HTF target in M15 ATR", minval = 0.25, maxval = 10.0, step = 0.25, group = groupCascade)
+allowNeutralDaily   = input.bool(true, "Allow neutral Daily when H4/H2 strongly agree", group = groupCascade)
+
+groupLTF = "04C — M5 / M3 / M1 Precision Confirmation"
+useLTFPrecision      = input.bool(true, "Use lower-timeframe confirmation", group = groupLTF)
+m5Timeframe          = input.timeframe("5", "Structural confirmation timeframe", group = groupLTF)
+m3Timeframe          = input.timeframe("3", "Validation timeframe", group = groupLTF)
+m1Timeframe          = input.timeframe("1", "Precise trigger timeframe", group = groupLTF)
+ltfStructureLookback = input.int(5, "LTF structure lookback", minval = 2, maxval = 20, group = groupLTF)
+ltfEventFreshBars    = input.int(10, "LTF event freshness in its own bars", minval = 2, maxval = 50, group = groupLTF)
+ltfMaximumAgeMinutes = input.int(45, "Maximum age of LTF confirmation in minutes", minval = 5, maxval = 240, group = groupLTF)
+ltfMinimumScore      = input.int(55, "Minimum LTF execution score", minval = 35, maxval = 95, group = groupLTF)
+ltfSequenceGraceMin  = input.int(12, "Sequence timing tolerance in minutes", minval = 0, maxval = 60, group = groupLTF)
+requireLtfRetest     = input.bool(true, "Require M1/M3 retest after lower-TF shift", group = groupLTF)
+
+groupSniper = "04D — M15 Sniper Engine"
+useSniperEngine         = input.bool(true, "Use M15 sniper state machine", group = groupSniper, tooltip = "Arms a setup only at a valid M15 POI, then accepts lower-TF confirmations that belong to that setup window.")
+sniperOnlyOnM15         = input.bool(true, "Restrict sniper final signals to M15 chart", group = groupSniper)
+sniperMinimumScore      = input.int(78, "Minimum sniper score", minval = 55, maxval = 95, group = groupSniper)
+sniperArmCoreThreshold  = input.int(58, "Core score required to arm setup", minval = 40, maxval = 90, group = groupSniper)
+sniperSetupExpiryBars   = input.int(10, "M15 setup expiry bars", minval = 2, maxval = 40, group = groupSniper)
+sniperLtfGraceMin       = input.int(7, "LTF event grace before M15 arm (minutes)", minval = 0, maxval = 30, group = groupSniper)
+sniperMinimumRR         = input.float(1.80, "Minimum projected reward/risk", minval = 0.5, maxval = 10.0, step = 0.10, group = groupSniper)
+sniperStopBufferAtr     = input.float(0.15, "Structural stop ATR buffer", minval = 0.0, maxval = 1.5, step = 0.05, group = groupSniper)
+sniperMaxEmaExtensionAtr = input.float(0.70, "Maximum entry extension from 9 EMA in ATR", minval = 0.10, maxval = 3.0, step = 0.05, group = groupSniper)
+requireM15CloseQuality  = input.bool(true, "Require strong M15 trigger close", group = groupSniper)
+m15CloseLocationMin     = input.float(0.62, "Trigger close location inside candle", minval = 0.50, maxval = 0.95, step = 0.01, group = groupSniper)
+showSniperTradeMap      = input.bool(true, "Show latest sniper entry / stop / target", group = groupSniper)
+
+groupNested = "04E — Nested Bollinger & Tactical Bias"
+useNestedBandIntelligence = input.bool(true, "Use nested Bollinger intelligence", group = groupNested, tooltip = "Treats D1/H4/H2/H1/M15/M5/M3/M1 bands as nested corridors. Outer-band touches are context, not automatic reversal signals.")
+nestedLowerExtreme       = input.float(0.15, "Lower extreme %B threshold", minval = -0.50, maxval = 0.45, step = 0.05, group = groupNested)
+nestedUpperExtreme       = input.float(0.85, "Upper extreme %B threshold", minval = 0.55, maxval = 1.50, step = 0.05, group = groupNested)
+nestedOutsideThreshold   = input.float(1.02, "Outer-band overextension %B", minval = 0.90, maxval = 1.50, step = 0.01, group = groupNested)
+nestedBandMinimumScore   = input.int(45, "Minimum nested-band context score", minval = 20, maxval = 90, group = groupNested)
+nestedBasisToleranceAtr  = input.float(0.18, "Basis reaction tolerance in M15 ATR", minval = 0.02, maxval = 1.0, step = 0.02, group = groupNested)
+
+groupTransition = "04F — Symmetric Regime Transition Engine"
+useRegimeTransition        = input.bool(true, "Use bull↔bear regime-transition engine", group = groupTransition, tooltip = "Preserves normal continuation logic, but allows a mature trend to enter exhaustion/transition before D1/H4 fully flip.")
+transitionArmScore          = input.int(60, "Transition watch / arm score", minval = 40, maxval = 90, group = groupTransition)
+transitionMinimumScore      = input.int(76, "Confirmed transition score", minval = 55, maxval = 95, group = groupTransition)
+transitionCoreFloor         = input.int(48, "Minimum opposite-side core score", minval = 30, maxval = 80, group = groupTransition)
+transitionCoreDeficitMax    = input.int(22, "Maximum core-score deficit vs old trend", minval = 0, maxval = 40, group = groupTransition, tooltip = "Lets an early transition arm even while the old trend's core score is still higher.")
+transitionBlockOppositeScore = input.int(68, "Block fresh old-trend entries at this transition score", minval = 50, maxval = 95, group = groupTransition)
+transitionMaturitySwings    = input.int(4, "Swing confirmations for mature trend", minval = 2, maxval = 8, group = groupTransition)
+transitionSwingFreshBars    = input.int(45, "Failed HH/LL freshness bars", minval = 10, maxval = 200, group = groupTransition)
+transitionMinimumRR         = input.float(1.25, "Minimum transition reward/risk", minval = 0.5, maxval = 5.0, step = 0.05, group = groupTransition)
+transitionMinimumRoomAtr    = input.float(0.60, "Minimum room to transition target in ATR", minval = 0.20, maxval = 5.0, step = 0.10, group = groupTransition)
+transitionRequireLiquidity  = input.bool(true, "Require liquidity/sweep evidence for transition arm", group = groupTransition)
+transitionSuppressOpposite  = input.bool(true, "Pause fresh old-trend entries during strong transition watch", group = groupTransition)
+
+groupLearning = "04G — Adaptive Learning Engine"
+useAdaptiveLearning       = input.bool(true, "Use adaptive learning", group = groupLearning, tooltip = "Learns from resolved historical armed setups on the loaded chart history. It rebuilds this memory whenever Pine reloads.")
+learningMode              = input.string("Bounded", "Learning influence", options = ["Advisory", "Bounded"], group = groupLearning, tooltip = "Advisory only reports learned confidence. Bounded can add/subtract a limited number of points from the final sniper quality score after the minimum sample is reached.")
+learningOutcomeMode       = input.string("T1", "Successful outcome", options = ["T1", "R Multiple"], group = groupLearning)
+learningSuccessR          = input.float(1.50, "R-multiple target when selected", minval = 0.5, maxval = 5.0, step = 0.10, group = groupLearning)
+learningMaximumBars       = input.int(40, "Maximum bars to resolve learned setup", minval = 5, maxval = 200, group = groupLearning)
+learningMinimumSamples    = input.int(20, "Resolved samples before learning affects signals", minval = 5, maxval = 200, group = groupLearning)
+learningPriorWinRate      = input.float(0.55, "Bayesian prior win rate", minval = 0.30, maxval = 0.75, step = 0.01, group = groupLearning)
+learningPriorStrength     = input.float(12.0, "Bayesian prior sample strength", minval = 2.0, maxval = 50.0, step = 1.0, group = groupLearning)
+learningMaxScoreAdjustment = input.int(10, "Maximum learned score adjustment", minval = 0, maxval = 20, group = groupLearning, tooltip = "Caps the learning effect so the original engine remains dominant.")
+showLearningOutcomeLabels = input.bool(true, "Show learned WIN/LOSS labels", group = groupLearning)
+
+groupStructure = "05 — Market Structure"
+swingLength    = input.int(3, "Swing pivot strength", minval = 1, maxval = 20, group = groupStructure)
+structureFresh = input.int(25, "Core structure freshness bars", minval = 2, maxval = 200, group = groupStructure)
+showSwingMarks = input.bool(false, "Show confirmed swing points in Full mode", group = groupStructure)
+maxStructureObjects = input.int(75, "Maximum retained structure objects", minval = 8, maxval = 225, group = groupStructure, tooltip = "v8 default is v7 limit + 50%: 50 + 25 = 75.")
+useAdvancedStructure = input.bool(true, "Use HH/HL/LH/LL protected-structure engine", group = groupStructure)
+internalSwingLength  = input.int(2, "Internal structure pivot strength", minval = 1, maxval = 10, group = groupStructure)
+equalSwingToleranceAtr = input.float(0.10, "EQH/EQL tolerance in ATR", minval = 0.01, maxval = 0.50, step = 0.01, group = groupStructure)
+equalSwingFreshBars = input.int(120, "EQH/EQL liquidity freshness bars", minval = 10, maxval = 500, group = groupStructure)
+advancedStructureMinimumScore = input.int(45, "Minimum advanced-structure score", minval = 20, maxval = 90, group = groupStructure)
+
+groupZones = "06 — FVG & Order Blocks"
+fvgAtrMinimum    = input.float(0.08, "Minimum FVG size in ATR", minval = 0.0, step = 0.01, group = groupZones)
+maxFVGs          = input.int(25, "Maximum active FVG records", minval = 1, maxval = 100, group = groupZones)
+obLookback       = input.int(12, "Order-block candle search", minval = 2, maxval = 50, group = groupZones)
+obUseWicks       = input.bool(true, "Use full candle range for OB", group = groupZones)
+obInvalidation   = input.string("Close", "OB invalidation", options = ["Close", "Wick"], group = groupZones)
+maxOrderBlocks   = input.int(20, "Maximum active order-block records", minval = 1, maxval = 80, group = groupZones)
+
+groupLiquidity = "07 — Sessions, Liquidity & Weekly Profiles"
+sessionTimezone     = input.string("Etc/UTC", "Session timezone", group = groupLiquidity, tooltip = "Examples: Etc/UTC, Africa/Nairobi, America/New_York")
+asiaSession         = input.session("0000-0800", "Asia session", group = groupLiquidity)
+londonSession       = input.session("0800-1300", "London session", group = groupLiquidity)
+londonKillzone      = input.session("0700-1000", "London sweep/killzone", group = groupLiquidity)
+newYorkSession      = input.session("1300-2100", "New York session", group = groupLiquidity)
+liquidityFresh      = input.int(20, "Liquidity-event freshness bars", minval = 2, maxval = 200, group = groupLiquidity)
+showLiquidityLabels = input.bool(true, "Show liquidity labels in Standard/Full", group = groupLiquidity)
+compressionAtrMax   = input.float(1.80, "Mon–Wed compression max range in daily ATR", minval = 0.3, maxval = 5.0, step = 0.1, group = groupLiquidity)
+weeklyProfileWeight = input.int(8, "Weekly-profile quality bonus", minval = 0, maxval = 20, group = groupLiquidity)
+
+groupObjective = "08 — Liquidity Objective Transition Engine"
+useObjectiveEngine     = input.bool(true, "Use active liquidity-objective engine", group = groupObjective)
+objectiveAcceptanceAtr = input.float(0.10, "Acceptance distance beyond target in ATR", minval = 0.0, maxval = 1.0, step = 0.02, group = groupObjective)
+objectiveResolveBars   = input.int(5, "Bars allowed to classify target reaction", minval = 1, maxval = 30, group = groupObjective)
+objectiveFreshBars     = input.int(18, "Target-reaction freshness bars", minval = 2, maxval = 100, group = groupObjective)
+showObjectiveLabel     = input.bool(true, "Show active objective label", group = groupObjective)
+
+groupVolume = "09 — Volume"
+useVolume         = input.bool(true, "Use relative volume", group = groupVolume)
+volumeLength      = input.int(20, "Volume average length", minval = 2, group = groupVolume)
+relativeVolumeMin = input.float(1.25, "High relative-volume threshold", minval = 0.1, step = 0.05, group = groupVolume)
+
+groupDXY = "10 — DXY & SMT Confirmation"
+useDXY       = input.bool(true, "Use inverse DXY confirmation", group = groupDXY)
+dxySymbol    = input.symbol("TVC:DXY", "DXY symbol", group = groupDXY)
+dxyTimeframe = input.timeframe("15", "DXY direction timeframe", group = groupDXY)
+dxyMaLength  = input.int(50, "DXY EMA length", minval = 2, group = groupDXY)
+dxyMomentum  = input.int(3, "DXY momentum bars", minval = 1, maxval = 50, group = groupDXY)
+useSMTConfirmation = input.bool(true, "Use SMT divergence confirmation", group = groupDXY)
+smtMode            = input.string("Either", "SMT comparison", options = ["DXY", "Silver", "Either", "Both"], group = groupDXY)
+smtTimeframe       = input.timeframe("15", "SMT comparison timeframe", group = groupDXY)
+smtSilverSymbol    = input.symbol("OANDA:XAGUSD", "Silver symbol", group = groupDXY)
+smtFreshBars       = input.int(24, "SMT divergence freshness bars", minval = 2, maxval = 100, group = groupDXY)
+
+groupPrecision = "11 — SMC, Fibonacci & Final Confirmation"
+confirmationMode      = input.string("Balanced", "Final confirmation mode", options = ["Legacy", "Balanced", "Precision"], group = groupPrecision, tooltip = "Legacy preserves the old core alert. Balanced adds market-cycle, SMC and fast-MA execution. Precision additionally requires Fib OTE, SMT and a retest.")
+useSMCConfirmation    = input.bool(true, "Use strengthened SMC confirmation", group = groupPrecision)
+smcFreshBars          = input.int(10, "SMC event freshness bars", minval = 2, maxval = 50, group = groupPrecision)
+smcBodyAtrMinimum     = input.float(0.45, "SMC displacement body in ATR", minval = 0.1, maxval = 3.0, step = 0.05, group = groupPrecision)
+smcBodyRatioMinimum   = input.float(0.60, "SMC displacement body/range ratio", minval = 0.2, maxval = 1.0, step = 0.05, group = groupPrecision)
+smcRequireZone        = input.bool(true, "Require recent OB/FVG/OTE location", group = groupPrecision)
+useFibonacciConfirm   = input.bool(true, "Use automatic Fibonacci OTE", group = groupPrecision)
+fibSetupExpiryBars    = input.int(90, "Fibonacci setup expiry bars", minval = 10, maxval = 500, group = groupPrecision)
+fibEntryFreshBars     = input.int(8, "OTE first-touch freshness bars", minval = 1, maxval = 50, group = groupPrecision)
+fibToleranceAtr       = input.float(0.10, "OTE touch tolerance in ATR", minval = 0.0, maxval = 1.0, step = 0.05, group = groupPrecision)
+maxEntryDistanceAtr   = input.float(0.75, "Maximum distance beyond OTE in ATR", minval = 0.1, maxval = 3.0, step = 0.05, group = groupPrecision)
+strongCoreBypass      = input.bool(true, "Balanced mode: allow exceptional core score", group = groupPrecision)
+strongCoreExtraPoints = input.int(10, "Exceptional-core points above threshold", minval = 0, maxval = 25, group = groupPrecision)
+
+groupRisk = "12 — Optional News Blackout & Alerts"
+useManualNewsBlackout = input.bool(false, "Use manual news blackout", group = groupRisk)
+newsBlackoutStart     = input.time(timestamp("01 Jan 2026 00:00 +0000"), "Blackout start", group = groupRisk)
+newsBlackoutEnd       = input.time(timestamp("01 Jan 2026 00:01 +0000"), "Blackout end", group = groupRisk)
+enableDynamicAlerts  = input.bool(true, "Enable dynamic alert() messages", group = groupRisk)
+alertOnEarlyWarning  = input.bool(false, "Alert on early reversal warnings", group = groupRisk)
+
+// ============================================================================
+// 2. HELPERS
+// ============================================================================
+
+f_select_ma(float emaValue, float smaValue, float rmaValue, float wmaValue, string averageType) =>
+    switch averageType
+        "SMA" => smaValue
+        "RMA" => rmaValue
+        "WMA" => wmaValue
+        => emaValue
+
+f_recent(bool condition, int bars) =>
+    int since = ta.barssince(condition)
+    not na(since) and since <= bars
+
+f_last_opposite_offset(bool bullishBreak, int lookback) =>
+    int result = na
+    for i = 1 to lookback
+        bool opposite = bullishBreak ? close[i] < open[i] : close[i] > open[i]
+        if na(result) and opposite
+            result := i
+    result
+
+f_price(float value) => str.tostring(value, format.mintick)
+
+f_score_color(int score, bool bullish) =>
+    score >= signalThreshold ? (bullish ? color.lime : color.red) :
+     score >= watchThreshold ? color.orange : color.new(color.gray, 30)
+
+f_add_line(array<line> items, line newItem, int maximum) =>
+    array.push(items, newItem)
+    while array.size(items) > maximum
+        line oldItem = array.shift(items)
+        if not na(oldItem)
+            line.delete(oldItem)
+
+f_add_label(array<label> items, label newItem, int maximum) =>
+    array.push(items, newItem)
+    while array.size(items) > maximum
+        label oldItem = array.shift(items)
+        if not na(oldItem)
+            label.delete(oldItem)
+
+f_pick_above(float currentPrice, float candidate, float best) =>
+    not na(candidate) and candidate > currentPrice and (na(best) or candidate < best) ? candidate : best
+
+f_pick_below(float currentPrice, float candidate, float best) =>
+    not na(candidate) and candidate < currentPrice and (na(best) or candidate > best) ? candidate : best
+
+f_phase_text(int phase) =>
+    phase == 2 ? "Exp↑" : phase == 1 ? "Pull↑" : phase == 4 ? "Reject↑" : phase == -2 ? "Exp↓" : phase == -1 ? "Pull↓" : phase == -4 ? "Reject↓" : phase == 3 ? "Squeeze" : "Mixed"
+
+f_band_zone(float percentB) =>
+    na(percentB) ? "n/a" : percentB > nestedOutsideThreshold ? "Above upper" : percentB >= nestedUpperExtreme ? "Upper extreme" : percentB > 0.60 ? "Upper half" : percentB >= 0.40 ? "Basis zone" : percentB > nestedLowerExtreme ? "Lower half" : percentB >= 1.0 - nestedOutsideThreshold ? "Lower extreme" : "Below lower"
+
+f_bias_text(int bias) =>
+    bias > 0 ? "Bullish" : bias < 0 ? "Bearish" : "Neutral"
+
+// Adaptive-learning helpers. Rates are Bayesian-smoothed so a handful of outcomes cannot dominate the engine.
+f_learn_rate(int wins, int trials) =>
+    (wins + learningPriorWinRate * learningPriorStrength) / math.max(trials + learningPriorStrength, 1.0)
+
+f_feature_mask(bool f0, bool f1, bool f2, bool f3, bool f4, bool f5, bool f6, bool f7, bool f8, bool f9) =>
+    (f0 ? 1 : 0) + (f1 ? 2 : 0) + (f2 ? 4 : 0) + (f3 ? 8 : 0) + (f4 ? 16 : 0) + (f5 ? 32 : 0) + (f6 ? 64 : 0) + (f7 ? 128 : 0) + (f8 ? 256 : 0) + (f9 ? 512 : 0)
+
+f_mask_has(int mask, int bitValue) =>
+    int quotient = int(math.floor(mask / bitValue))
+    quotient % 2 == 1
+
+f_learning_feature_rate(int mask, array<int> winsArr, array<int> trialsArr) =>
+    float totalRate = 0.0
+    int activeCount = 0
+    for i = 0 to 9
+        int bitValue = int(math.pow(2, i))
+        if f_mask_has(mask, bitValue)
+            totalRate += f_learn_rate(array.get(winsArr, i), array.get(trialsArr, i))
+            activeCount += 1
+    activeCount > 0 ? totalRate / activeCount : learningPriorWinRate
+
+f_learning_update(int mask, bool won, array<int> featureWins, array<int> featureTrials, array<int> signatureWins, array<int> signatureTrials) =>
+    array.set(signatureTrials, mask, array.get(signatureTrials, mask) + 1)
+    if won
+        array.set(signatureWins, mask, array.get(signatureWins, mask) + 1)
+    for i = 0 to 9
+        int bitValue = int(math.pow(2, i))
+        if f_mask_has(mask, bitValue)
+            array.set(featureTrials, i, array.get(featureTrials, i) + 1)
+            if won
+                array.set(featureWins, i, array.get(featureWins, i) + 1)
+    0
+
+f_bound_score(int score) =>
+    math.max(0, math.min(100, score))
+
+// HTF phase codes: 2 bullish expansion, 1 bullish pullback, 4 bullish outer-band rejection,
+// -2 bearish expansion, -1 bearish pullback, -4 bearish outer-band rejection, 3 squeeze, 0 mixed.
+f_htf_pack(int offset) =>
+    float c = close[offset]
+    float e20Series = ta.ema(close, ema20Len)
+    float e50Series = ta.ema(close, ema50Len)
+    float e200Series = ta.ema(close, ma200Len)
+    float basisSeries = ta.sma(close, bbLength)
+    float devSeries = ta.stdev(close, bbLength) * bbMultiplier
+    float upperSeries = basisSeries + devSeries
+    float lowerSeries = basisSeries - devSeries
+    float atrSeries = ta.atr(atrLength)
+    float widthSeries = (upperSeries - lowerSeries) / math.max(math.abs(basisSeries), syminfo.mintick)
+    float e20 = e20Series[offset]
+    float e50 = e50Series[offset]
+    float e200 = e200Series[offset]
+    float basis = basisSeries[offset]
+    float upper = upperSeries[offset]
+    float lower = lowerSeries[offset]
+    float atrValue = atrSeries[offset]
+    float width = widthSeries[offset]
+    float widthPast = widthSeries[offset + mtfSlopeBars]
+    float basisPast = basisSeries[offset + mtfSlopeBars]
+    float bandRange = math.max(upper - lower, syminfo.mintick)
+    float percentB = (c - lower) / bandRange
+    float previousHigh = ta.highest(high, mtfStructureLookback)[offset + 1]
+    float previousLow = ta.lowest(low, mtfStructureLookback)[offset + 1]
+    bool bullBreakLocal = c > previousHigh
+    bool bearBreakLocal = c < previousLow
+    bool basisRising = basis > basisPast
+    bool basisFalling = basis < basisPast
+    bool widthExpanding = width > widthPast
+    bool squeeze = width <= widthPast * mtfSqueezeRatio
+    bool bullTrendStrong = c > e20 and e20 > e50 and c > e200
+    bool bearTrendStrong = c < e20 and e20 < e50 and c < e200
+    int trend = bullTrendStrong ? 2 : bearTrendStrong ? -2 : c > basis and e20 >= e50 ? 1 : c < basis and e20 <= e50 ? -1 : 0
+    bool lowerReject = low[offset] < lower and c > lower
+    bool upperReject = high[offset] > upper and c < upper
+    int phase = lowerReject ? 4 : upperReject ? -4 : squeeze ? 3 : trend > 0 and c >= basis and basisRising and widthExpanding ? 2 : trend > 0 and c < basis and c > lower ? 1 : trend < 0 and c <= basis and basisFalling and widthExpanding ? -2 : trend < 0 and c > basis and c < upper ? -1 : 0
+    [c, upper, basis, lower, atrValue, percentB, trend, phase, bullBreakLocal, bearBreakLocal]
+
+// Lower-timeframe execution packet. It retains the latest event timestamps so the M15 chart
+// can verify that M1 initiated, M3 validated, M5 confirmed, and M1/M3 supplied a retest.
+f_ltf_pack(int offset) =>
+    float atrSeries = ta.atr(atrLength)
+    float wmaSeries = ta.wma(close, wmaFastLen)
+    float emaSeries = ta.ema(close, emaTriggerLen)
+    float ltfBasisSeries = ta.sma(close, bbLength)
+    float ltfDevSeries = ta.stdev(close, bbLength) * bbMultiplier
+    float ltfUpperSeries = ltfBasisSeries + ltfDevSeries
+    float ltfLowerSeries = ltfBasisSeries - ltfDevSeries
+    float ltfBandRangeSeries = math.max(ltfUpperSeries - ltfLowerSeries, syminfo.mintick)
+    float ltfPercentBSeries = (close - ltfLowerSeries) / ltfBandRangeSeries
+    float localBody = math.abs(close - open)
+    float localRange = math.max(high - low, syminfo.mintick)
+    float localRatio = localBody / localRange
+    float priorHigh = ta.highest(high[1], ltfStructureLookback)
+    float priorLow = ta.lowest(low[1], ltfStructureLookback)
+    bool bullSweepRaw = low < priorLow and close > priorLow
+    bool bearSweepRaw = high > priorHigh and close < priorHigh
+    bool bullMssRaw = close > priorHigh
+    bool bearMssRaw = close < priorLow
+    bool bullCrossRaw = ta.crossover(wmaSeries, emaSeries)
+    bool bearCrossRaw = ta.crossunder(wmaSeries, emaSeries)
+    bool bullCrossFreshRaw = ta.barssince(bullCrossRaw) <= ltfEventFreshBars and wmaSeries > emaSeries
+    bool bearCrossFreshRaw = ta.barssince(bearCrossRaw) <= ltfEventFreshBars and wmaSeries < emaSeries
+    bool bullDisplacementRaw = close > open and localBody >= atrSeries * smcBodyAtrMinimum and localRatio >= smcBodyRatioMinimum
+    bool bearDisplacementRaw = close < open and localBody >= atrSeries * smcBodyAtrMinimum and localRatio >= smcBodyRatioMinimum
+    bool bullFvgRaw = bar_index >= 2 and low > high[2]
+    bool bearFvgRaw = bar_index >= 2 and high < low[2]
+    bool bullRetestRaw = ta.barssince(bullCrossRaw) <= retestWindowBars and low <= emaSeries + atrSeries * retestToleranceAtr and close > emaSeries and wmaSeries > emaSeries and close > open
+    bool bearRetestRaw = ta.barssince(bearCrossRaw) <= retestWindowBars and high >= emaSeries - atrSeries * retestToleranceAtr and close < emaSeries and wmaSeries < emaSeries and close < open
+    bool bullSweepFreshRaw = ta.barssince(bullSweepRaw) <= ltfEventFreshBars
+    bool bearSweepFreshRaw = ta.barssince(bearSweepRaw) <= ltfEventFreshBars
+    bool bullMssFreshRaw = ta.barssince(bullMssRaw) <= ltfEventFreshBars
+    bool bearMssFreshRaw = ta.barssince(bearMssRaw) <= ltfEventFreshBars
+    bool bullDisplacementFreshRaw = ta.barssince(bullDisplacementRaw) <= ltfEventFreshBars
+    bool bearDisplacementFreshRaw = ta.barssince(bearDisplacementRaw) <= ltfEventFreshBars
+    bool bullFvgFreshRaw = ta.barssince(bullFvgRaw) <= ltfEventFreshBars
+    bool bearFvgFreshRaw = ta.barssince(bearFvgRaw) <= ltfEventFreshBars
+    bool bullRetestFreshRaw = ta.barssince(bullRetestRaw) <= ltfEventFreshBars
+    bool bearRetestFreshRaw = ta.barssince(bearRetestRaw) <= ltfEventFreshBars
+    int bullScoreSeries = math.min(100, (bullSweepFreshRaw ? 20 : 0) + (bullMssFreshRaw ? 25 : 0) + (bullCrossFreshRaw ? 15 : 0) + (bullDisplacementFreshRaw ? 15 : 0) + (bullFvgFreshRaw ? 10 : 0) + (bullRetestFreshRaw ? 15 : 0))
+    int bearScoreSeries = math.min(100, (bearSweepFreshRaw ? 20 : 0) + (bearMssFreshRaw ? 25 : 0) + (bearCrossFreshRaw ? 15 : 0) + (bearDisplacementFreshRaw ? 15 : 0) + (bearFvgFreshRaw ? 10 : 0) + (bearRetestFreshRaw ? 15 : 0))
+    int bullInitTimeSeries = nz(ta.valuewhen(bullSweepRaw or bullCrossRaw, time, 0), 0)
+    int bearInitTimeSeries = nz(ta.valuewhen(bearSweepRaw or bearCrossRaw, time, 0), 0)
+    int bullValidationTimeSeries = nz(ta.valuewhen(bullMssRaw or bullDisplacementRaw or bullFvgRaw, time, 0), 0)
+    int bearValidationTimeSeries = nz(ta.valuewhen(bearMssRaw or bearDisplacementRaw or bearFvgRaw, time, 0), 0)
+    int bullRetestTimeSeries = nz(ta.valuewhen(bullRetestRaw, time, 0), 0)
+    int bearRetestTimeSeries = nz(ta.valuewhen(bearRetestRaw, time, 0), 0)
+    int directionSeries = wmaSeries > emaSeries ? 1 : wmaSeries < emaSeries ? -1 : 0
+    [bullScoreSeries[offset], bearScoreSeries[offset], bullMssFreshRaw[offset], bearMssFreshRaw[offset], bullInitTimeSeries[offset], bearInitTimeSeries[offset], bullValidationTimeSeries[offset], bearValidationTimeSeries[offset], bullRetestTimeSeries[offset], bearRetestTimeSeries[offset], directionSeries[offset], ltfPercentBSeries[offset]]
+
+// ============================================================================
+// 3. DISPLAY FLAGS
+// ============================================================================
+
+bool isMinimal = displayMode == "Minimal"
+bool isStandard = displayMode == "Standard"
+bool isFull = displayMode == "Full Analysis"
+bool showStandardVisuals = isStandard or isFull
+bool showFullVisuals = isFull
+bool chartIsM15 = timeframe.isminutes and timeframe.multiplier == 15
+bool sniperTimeframePass = not sniperOnlyOnM15 or chartIsM15
+
+// ============================================================================
+// 4. CORE TREND, FAST MA INTELLIGENCE, BOLLINGER, ATR & VOLUME
+// ============================================================================
+
+ma200EMA = ta.ema(close, ma200Len)
+ma200SMA = ta.sma(close, ma200Len)
+ma200RMA = ta.rma(close, ma200Len)
+ma200WMA = ta.wma(close, ma200Len)
+
+ma2000EMA = ta.ema(close, ma2000Len)
+ma2000SMA = ta.sma(close, ma2000Len)
+ma2000RMA = ta.rma(close, ma2000Len)
+ma2000WMA = ta.wma(close, ma2000Len)
+
+ma200  = f_select_ma(ma200EMA, ma200SMA, ma200RMA, ma200WMA, maType)
+ma2000 = f_select_ma(ma2000EMA, ma2000SMA, ma2000RMA, ma2000WMA, maType)
+ema20  = ta.ema(close, ema20Len)
+ema50  = ta.ema(close, ema50Len)
+wma5   = ta.wma(close, wmaFastLen)
+ema9   = ta.ema(close, emaTriggerLen)
+atr    = ta.atr(atrLength)
+
+bbBasis = ta.sma(close, bbLength)
+bbDev   = ta.stdev(close, bbLength) * bbMultiplier
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+float m15BandRange = math.max(bbUpper - bbLower, syminfo.mintick)
+float m15PercentB = (close - bbLower) / m15BandRange
+
+float bodySize = math.abs(close - open)
+float candleRange = math.max(high - low, syminfo.mintick)
+float bodyToRange = bodySize / candleRange
+bool bullishDisplacement = close > open and bodySize >= atr * smcBodyAtrMinimum and bodyToRange >= smcBodyRatioMinimum
+bool bearishDisplacement = close < open and bodySize >= atr * smcBodyAtrMinimum and bodyToRange >= smcBodyRatioMinimum
+
+volumeAverage = ta.sma(volume, volumeLength)
+relativeVolume = volumeAverage > 0 ? volume / volumeAverage : na
+highRelativeVolume = not useVolume or (not na(relativeVolume) and relativeVolume >= relativeVolumeMin)
+
+float safeAtr = math.max(atr, syminfo.mintick)
+float wmaSlopeNorm = (wma5 - wma5[fastSlopeBars]) / (safeAtr * fastSlopeBars)
+float ema9SlopeNorm = (ema9 - ema9[fastSlopeBars]) / (safeAtr * fastSlopeBars)
+float maFanNorm = math.abs(wma5 - ema9) / safeAtr
+bool maFanExpanding = maFanNorm > minimumFanAtr and maFanNorm > nz(maFanNorm[1], maFanNorm)
+bool wmaFlattening = math.abs(wmaSlopeNorm) <= flatSlopeAtr
+bool bullishFastCross = ta.crossover(wma5, ema9)
+bool bearishFastCross = ta.crossunder(wma5, ema9)
+bool bullishFastSlope = wmaSlopeNorm >= minimumSlopeAtr and ema9SlopeNorm >= minimumSlopeAtr
+bool bearishFastSlope = wmaSlopeNorm <= -minimumSlopeAtr and ema9SlopeNorm <= -minimumSlopeAtr
+bool bullishClearCandle = requireClearCandle ? (low > ema9 and close > wma5 and close > open) : (close > ema9 and close > wma5 and close > open)
+bool bearishClearCandle = requireClearCandle ? (high < ema9 and close < wma5 and close < open) : (close < ema9 and close < wma5 and close < open)
+bool bullishFanPass = not requireFanExpansion or maFanExpanding
+bool bearishFanPass = not requireFanExpansion or maFanExpanding
+
+var int latestBullCrossBar = na
+var int latestBearCrossBar = na
+if bullishFastCross
+    latestBullCrossBar := bar_index
+if bearishFastCross
+    latestBearCrossBar := bar_index
+
+bool bullCrossFresh = not na(latestBullCrossBar) and bar_index - latestBullCrossBar <= fastTriggerFreshBars
+bool bearCrossFresh = not na(latestBearCrossBar) and bar_index - latestBearCrossBar <= fastTriggerFreshBars
+bool bullishMomentumWrap = bullCrossFresh and wma5 > ema9 and bullishFastSlope and bullishFanPass and bullishClearCandle
+bool bearishMomentumWrap = bearCrossFresh and wma5 < ema9 and bearishFastSlope and bearishFanPass and bearishClearCandle
+
+bool bullishEmaRetest = not na(latestBullCrossBar) and bar_index > latestBullCrossBar and bar_index - latestBullCrossBar <= retestWindowBars and
+     low <= ema9 + atr * retestToleranceAtr and close > ema9 and wma5 > ema9 and close > open and bullishFastSlope
+bool bearishEmaRetest = not na(latestBearCrossBar) and bar_index > latestBearCrossBar and bar_index - latestBearCrossBar <= retestWindowBars and
+     high >= ema9 - atr * retestToleranceAtr and close < ema9 and wma5 < ema9 and close < open and bearishFastSlope
+
+bool bullishFastEntry = entryTriggerMode == "Close" ? bullishMomentumWrap : entryTriggerMode == "Retest" ? bullishEmaRetest : (bullishMomentumWrap or bullishEmaRetest)
+bool bearishFastEntry = entryTriggerMode == "Close" ? bearishMomentumWrap : entryTriggerMode == "Retest" ? bearishEmaRetest : (bearishMomentumWrap or bearishEmaRetest)
+
+bool bullishMAStack = wma5 > ema9 and ema9 > ema20 and ema20 > ema50 and close > ma200
+bool bearishMAStack = wma5 < ema9 and ema9 < ema20 and ema20 < ema50 and close < ma200
+bool bullishPullbackRegime = close > ma200 and ema20 > ema50 and wma5 <= ema9
+bool bearishPullbackRegime = close < ma200 and ema20 < ema50 and wma5 >= ema9
+string maRegime = bullishMAStack ? "Strong bullish stack" : bearishMAStack ? "Strong bearish stack" : bullishPullbackRegime ? "Bullish pullback" : bearishPullbackRegime ? "Bearish pullback" : wmaFlattening ? "Fast momentum exhausting" : "Mixed / transition"
+
+plot(wma5, "5 WMA execution", color = color.new(color.red, 0), linewidth = 1)
+plot(ema9, "9 EMA trigger", color = color.new(color.blue, 0), linewidth = 1)
+plot(showFullVisuals ? ema20 : na, "20 EMA", color = color.new(color.orange, 15), linewidth = 1)
+plot(showFullVisuals ? ema50 : na, "50 EMA", color = color.new(color.purple, 15), linewidth = 1)
+plot(ma200, "MA 200", color = color.new(color.maroon, 0), linewidth = 2)
+plot(showFullVisuals ? ma2000 : na, "MA 2000", color = color.new(color.aqua, 15), linewidth = 2)
+
+pBBU = plot(showStandardVisuals ? bbUpper : na, "BB Upper", color = color.new(color.teal, 45))
+pBBB = plot(showStandardVisuals ? bbBasis : na, "BB Basis", color = color.new(color.teal, 65))
+pBBL = plot(showStandardVisuals ? bbLower : na, "BB Lower", color = color.new(color.teal, 45))
+fill(pBBU, pBBL, color = showStandardVisuals ? color.new(color.teal, 95) : na, title = "Bollinger fill")
+
+// Confirmed higher-timeframe values. The one-bar offset prevents developing HTF data from repainting.
+htfClose = request.security(syminfo.tickerid, htfTimeframe, close[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+htfEMA   = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, htfMaLength)[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+htfBull  = not useHTF or htfClose > htfEMA
+htfBear  = not useHTF or htfClose < htfEMA
+
+// ============================================================================
+// BIDIRECTIONAL TIMEFRAME CASCADE — D1/H4/H2/H1 DIRECTION, M5/M3/M1 EXECUTION
+// ============================================================================
+
+int mtfOffset = 1
+[d1Close, d1Upper, d1Basis, d1Lower, d1Atr, d1PercentB, d1Trend, d1Phase, d1BullBreak, d1BearBreak] = request.security(syminfo.tickerid, dailyTimeframe, f_htf_pack(mtfOffset), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+[h4Close, h4Upper, h4Basis, h4Lower, h4Atr, h4PercentB, h4Trend, h4Phase, h4BullBreak, h4BearBreak] = request.security(syminfo.tickerid, h4Timeframe, f_htf_pack(mtfOffset), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+[h2Close, h2Upper, h2Basis, h2Lower, h2Atr, h2PercentB, h2Trend, h2Phase, h2BullBreak, h2BearBreak] = request.security(syminfo.tickerid, h2Timeframe, f_htf_pack(mtfOffset), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+[h1Close, h1Upper, h1Basis, h1Lower, h1Atr, h1PercentB, h1Trend, h1Phase, h1BullBreak, h1BearBreak] = request.security(syminfo.tickerid, h1Timeframe, f_htf_pack(mtfOffset), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+
+[m5BullScore, m5BearScore, m5BullMss, m5BearMss, m5BullInitTime, m5BearInitTime, m5BullValidationTime, m5BearValidationTime, m5BullRetestTime, m5BearRetestTime, m5Direction, m5PercentB] = request.security(syminfo.tickerid, m5Timeframe, f_ltf_pack(1), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+[m3BullScore, m3BearScore, m3BullMss, m3BearMss, m3BullInitTime, m3BearInitTime, m3BullValidationTime, m3BearValidationTime, m3BullRetestTime, m3BearRetestTime, m3Direction, m3PercentB] = request.security(syminfo.tickerid, m3Timeframe, f_ltf_pack(1), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+[m1BullScore, m1BearScore, m1BullMss, m1BearMss, m1BullInitTime, m1BearInitTime, m1BullValidationTime, m1BearValidationTime, m1BullRetestTime, m1BearRetestTime, m1Direction, m1PercentB] = request.security(syminfo.tickerid, m1Timeframe, f_ltf_pack(1), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+
+int maxLtfAgeMs = ltfMaximumAgeMinutes * 60 * 1000
+int sequenceGraceMs = ltfSequenceGraceMin * 60 * 1000
+bool m1BullFresh = m1BullInitTime > 0 and time_close - m1BullInitTime <= maxLtfAgeMs
+bool m1BearFresh = m1BearInitTime > 0 and time_close - m1BearInitTime <= maxLtfAgeMs
+bool m3BullFresh = m3BullValidationTime > 0 and time_close - m3BullValidationTime <= maxLtfAgeMs
+bool m3BearFresh = m3BearValidationTime > 0 and time_close - m3BearValidationTime <= maxLtfAgeMs
+bool m5BullFresh = m5BullValidationTime > 0 and time_close - m5BullValidationTime <= maxLtfAgeMs
+bool m5BearFresh = m5BearValidationTime > 0 and time_close - m5BearValidationTime <= maxLtfAgeMs
+bool bullRetestFresh = math.max(m1BullRetestTime, m3BullRetestTime) > 0 and time_close - math.max(m1BullRetestTime, m3BullRetestTime) <= maxLtfAgeMs
+bool bearRetestFresh = math.max(m1BearRetestTime, m3BearRetestTime) > 0 and time_close - math.max(m1BearRetestTime, m3BearRetestTime) <= maxLtfAgeMs
+
+int latestBullRetestTime = math.max(m1BullRetestTime, m3BullRetestTime)
+int latestBearRetestTime = math.max(m1BearRetestTime, m3BearRetestTime)
+bool bullishLtfSequence = m1BullFresh and m3BullFresh and m5BullFresh and m3BullValidationTime + sequenceGraceMs >= m1BullInitTime and m5BullValidationTime + sequenceGraceMs >= m3BullValidationTime and (not requireLtfRetest or latestBullRetestTime + sequenceGraceMs >= math.max(m3BullValidationTime, m5BullValidationTime))
+bool bearishLtfSequence = m1BearFresh and m3BearFresh and m5BearFresh and m3BearValidationTime + sequenceGraceMs >= m1BearInitTime and m5BearValidationTime + sequenceGraceMs >= m3BearValidationTime and (not requireLtfRetest or latestBearRetestTime + sequenceGraceMs >= math.max(m3BearValidationTime, m5BearValidationTime))
+
+int longLtfScore = math.min(100, int(math.round(m5BullScore * 0.40 + m3BullScore * 0.35 + m1BullScore * 0.25)))
+int shortLtfScore = math.min(100, int(math.round(m5BearScore * 0.40 + m3BearScore * 0.35 + m1BearScore * 0.25)))
+bool balancedLtfLong = m3BullFresh and m5BullFresh and m3BullScore >= ltfMinimumScore and m5BullScore >= ltfMinimumScore and (not requireLtfRetest or bullRetestFresh) and m5Direction >= 0
+bool balancedLtfShort = m3BearFresh and m5BearFresh and m3BearScore >= ltfMinimumScore and m5BearScore >= ltfMinimumScore and (not requireLtfRetest or bearRetestFresh) and m5Direction <= 0
+bool precisionLtfLong = bullishLtfSequence and longLtfScore >= ltfMinimumScore
+bool precisionLtfShort = bearishLtfSequence and shortLtfScore >= ltfMinimumScore
+
+// HTF phase-aware alignment. A bullish M15 pullback is allowed when D1/H4 remain bullish;
+// every timeframe does not need to be bullish at the same moment.
+bool dailyLongPermission = d1Trend > 0 or (allowNeutralDaily and d1Trend == 0)
+bool dailyShortPermission = d1Trend < 0 or (allowNeutralDaily and d1Trend == 0)
+bool h4BullCycle = h4Trend > 0 and (h4Phase == 2 or h4Phase == 1 or h4Phase == 0)
+bool h4BearCycle = h4Trend < 0 and (h4Phase == -2 or h4Phase == -1 or h4Phase == 0)
+bool h2NotBearReversal = h2Trend >= 0 or (h2Trend < 0 and not h2BearBreak and h2PercentB > 0.15)
+bool h2NotBullReversal = h2Trend <= 0 or (h2Trend > 0 and not h2BullBreak and h2PercentB < 0.85)
+bool h1BullPoi = h1Phase == 1 or h1Phase == 4 or (h1Trend > 0 and h1PercentB <= 0.60)
+bool h1BearPoi = h1Phase == -1 or h1Phase == -4 or (h1Trend < 0 and h1PercentB >= 0.40)
+
+// Nested Bollinger corridor intelligence. Structural bias and tactical bias are intentionally separate.
+int structuralBias = dailyLongPermission and h4Trend > 0 ? 1 : dailyShortPermission and h4Trend < 0 ? -1 : h4Trend > 0 ? 1 : h4Trend < 0 ? -1 : 0
+bool m15UpperExtreme = m15PercentB >= nestedUpperExtreme
+bool m15LowerExtreme = m15PercentB <= nestedLowerExtreme
+bool ltfUpperExtreme = m5PercentB >= nestedUpperExtreme or m3PercentB >= nestedUpperExtreme or m1PercentB >= nestedUpperExtreme
+bool ltfLowerExtreme = m5PercentB <= nestedLowerExtreme or m3PercentB <= nestedLowerExtreme or m1PercentB <= nestedLowerExtreme
+bool nestedUpperExhaustionWatch = (h1PercentB >= nestedUpperExtreme or h2PercentB >= nestedUpperExtreme) and m15UpperExtreme and ltfUpperExtreme
+bool nestedLowerExhaustionWatch = (h1PercentB <= nestedLowerExtreme or h2PercentB <= nestedLowerExtreme) and m15LowerExtreme and ltfLowerExtreme
+bool h4BasisBullHold = h4Trend > 0 and low <= h4Basis + atr * nestedBasisToleranceAtr and close > h4Basis
+bool h4BasisBearReject = h4Trend < 0 and high >= h4Basis - atr * nestedBasisToleranceAtr and close < h4Basis
+bool h4BasisAcceptedUp = h4Close > h4Basis and h4PercentB >= 0.55
+bool h4BasisAcceptedDown = h4Close < h4Basis and h4PercentB <= 0.45
+bool nestedBullHandoff = m15PercentB > 0.55 and h1PercentB > 0.52 and h2PercentB > 0.50
+bool nestedBearHandoff = m15PercentB < 0.45 and h1PercentB < 0.48 and h2PercentB < 0.50
+bool tacticalPullbackShortWatch = structuralBias > 0 and nestedUpperExhaustionWatch
+bool tacticalPullbackLongWatch = structuralBias < 0 and nestedLowerExhaustionWatch
+bool halfwayReversalShortWatch = h4Close > h4Basis and h4PercentB > 0.55 and h4PercentB < nestedUpperExtreme and nestedUpperExhaustionWatch
+bool halfwayReversalLongWatch = h4Close < h4Basis and h4PercentB < 0.45 and h4PercentB > nestedLowerExtreme and nestedLowerExhaustionWatch
+int tacticalBias = tacticalPullbackLongWatch ? 1 : tacticalPullbackShortWatch ? -1 : structuralBias
+
+bool mtfContinuationLongContext = dailyLongPermission and h4BullCycle and h2NotBearReversal and (h1BullPoi or h1Trend > 0)
+bool mtfContinuationShortContext = dailyShortPermission and h4BearCycle and h2NotBullReversal and (h1BearPoi or h1Trend < 0)
+bool mtfReversalLongContext = (h4Phase == 4 or h1Phase == 4 or tacticalPullbackLongWatch or halfwayReversalLongWatch) and h2Trend >= -1 and not d1BearBreak
+bool mtfReversalShortContext = (h4Phase == -4 or h1Phase == -4 or tacticalPullbackShortWatch or halfwayReversalShortWatch) and h2Trend <= 1 and not d1BullBreak
+
+int longMtfScore = math.min(100, (d1Trend > 0 ? 20 : d1Trend == 0 and allowNeutralDaily ? 10 : 0) + (h4BullCycle ? 25 : h4Phase == 4 ? 18 : 0) + (h2Trend > 0 ? 15 : h2NotBearReversal ? 8 : 0) + (h1BullPoi ? 20 : h1Trend > 0 ? 10 : 0) + (h4BullBreak ? 10 : 0) + (h1BullBreak ? 10 : 0))
+int shortMtfScore = math.min(100, (d1Trend < 0 ? 20 : d1Trend == 0 and allowNeutralDaily ? 10 : 0) + (h4BearCycle ? 25 : h4Phase == -4 ? 18 : 0) + (h2Trend < 0 ? 15 : h2NotBullReversal ? 8 : 0) + (h1BearPoi ? 20 : h1Trend < 0 ? 10 : 0) + (h4BearBreak ? 10 : 0) + (h1BearBreak ? 10 : 0))
+
+int longNestedBandScore = math.min(100,
+     (structuralBias > 0 ? 25 : tacticalPullbackLongWatch ? 25 : 0) +
+     (h2PercentB <= 0.70 ? 10 : 0) +
+     (h1PercentB <= 0.60 ? 15 : h1Phase == 4 ? 15 : 0) +
+     (m15LowerExtreme ? 20 : m15PercentB <= 0.40 ? 15 : 0) +
+     (ltfLowerExtreme ? 15 : 0) +
+     (h4BasisBullHold or h4BasisAcceptedUp ? 10 : 0) +
+     (nestedBullHandoff ? 10 : 0))
+int shortNestedBandScore = math.min(100,
+     (structuralBias < 0 ? 25 : tacticalPullbackShortWatch ? 25 : 0) +
+     (h2PercentB >= 0.30 ? 10 : 0) +
+     (h1PercentB >= 0.40 ? 15 : h1Phase == -4 ? 15 : 0) +
+     (m15UpperExtreme ? 20 : m15PercentB >= 0.60 ? 15 : 0) +
+     (ltfUpperExtreme ? 15 : 0) +
+     (h4BasisBearReject or h4BasisAcceptedDown ? 10 : 0) +
+     (nestedBearHandoff ? 10 : 0))
+
+bool nestedLongPermission = not useNestedBandIntelligence or (longNestedBandScore >= nestedBandMinimumScore and not nestedUpperExhaustionWatch) or tacticalPullbackLongWatch
+bool nestedShortPermission = not useNestedBandIntelligence or (shortNestedBandScore >= nestedBandMinimumScore and not nestedLowerExhaustionWatch) or tacticalPullbackShortWatch
+
+// Keep the macro H4 destination for context, but the sniper target later uses the nearest valid nested band station.
+float mtfLongTarget = h4Trend > 0 ? (close < h4Basis ? h4Basis : h4Upper) : mtfReversalLongContext ? h4Basis : d1Upper
+float mtfShortTarget = h4Trend < 0 ? (close > h4Basis ? h4Basis : h4Lower) : mtfReversalShortContext ? h4Basis : d1Lower
+string mtfLongTargetName = h4Trend > 0 ? (close < h4Basis ? "H4 BB Basis" : "H4 BB Upper") : mtfReversalLongContext ? "H4 BB Basis" : "Daily BB Upper"
+string mtfShortTargetName = h4Trend < 0 ? (close > h4Basis ? "H4 BB Basis" : "H4 BB Lower") : mtfReversalShortContext ? "H4 BB Basis" : "Daily BB Lower"
+bool longTargetRoomValid = not useMTFCascade or (not na(mtfLongTarget) and mtfLongTarget > close and mtfLongTarget - close >= atr * minimumTargetRoomAtr)
+bool shortTargetRoomValid = not useMTFCascade or (not na(mtfShortTarget) and mtfShortTarget < close and close - mtfShortTarget >= atr * minimumTargetRoomAtr)
+
+// Nested next-station targets. H1/H2 bands can interrupt an H4 leg, so M15 does not blindly assume the opposite H4 outer band.
+float nestedLongTarget = na
+string nestedLongTargetName = "None"
+float h1LongStation = close < h1Basis ? h1Basis : h1Upper
+float h2LongStation = close < h2Basis ? h2Basis : h2Upper
+float h4LongStation = close < h4Basis ? h4Basis : h4Upper
+if not na(h1LongStation) and h1LongStation > close
+    nestedLongTarget := h1LongStation
+    nestedLongTargetName := close < h1Basis ? "H1 BB Basis" : "H1 BB Upper"
+if not na(h2LongStation) and h2LongStation > close and (na(nestedLongTarget) or h2LongStation < nestedLongTarget)
+    nestedLongTarget := h2LongStation
+    nestedLongTargetName := close < h2Basis ? "H2 BB Basis" : "H2 BB Upper"
+if not na(h4LongStation) and h4LongStation > close and (na(nestedLongTarget) or h4LongStation < nestedLongTarget)
+    nestedLongTarget := h4LongStation
+    nestedLongTargetName := close < h4Basis ? "H4 BB Basis" : "H4 BB Upper"
+
+float nestedShortTarget = na
+string nestedShortTargetName = "None"
+float h1ShortStation = close > h1Basis ? h1Basis : h1Lower
+float h2ShortStation = close > h2Basis ? h2Basis : h2Lower
+float h4ShortStation = close > h4Basis ? h4Basis : h4Lower
+if not na(h1ShortStation) and h1ShortStation < close
+    nestedShortTarget := h1ShortStation
+    nestedShortTargetName := close > h1Basis ? "H1 BB Basis" : "H1 BB Lower"
+if not na(h2ShortStation) and h2ShortStation < close and (na(nestedShortTarget) or h2ShortStation > nestedShortTarget)
+    nestedShortTarget := h2ShortStation
+    nestedShortTargetName := close > h2Basis ? "H2 BB Basis" : "H2 BB Lower"
+if not na(h4ShortStation) and h4ShortStation < close and (na(nestedShortTarget) or h4ShortStation > nestedShortTarget)
+    nestedShortTarget := h4ShortStation
+    nestedShortTargetName := close > h4Basis ? "H4 BB Basis" : "H4 BB Lower"
+
+string bandOwner = math.abs(h4Phase) == 2 ? "H4" : math.abs(h2Phase) == 2 ? "H2" : math.abs(h1Phase) == 2 or math.abs(h1Phase) == 1 ? "H1" : "M15"
+string h4BasisState = h4BasisBullHold ? "Bull basis hold" : h4BasisBearReject ? "Bear basis reject" : h4BasisAcceptedUp ? "Accepted above basis" : h4BasisAcceptedDown ? "Accepted below basis" : close > h4Basis ? "Above basis / reassess" : "Below basis / reassess"
+string nestedPathText = tacticalPullbackShortWatch ? "Local upper exhaustion → basis pullback" : tacticalPullbackLongWatch ? "Local lower exhaustion → basis pullback" : structuralBias > 0 ? (close < h4Basis ? "H4 lower half → basis" : "H4 basis → upper corridor") : structuralBias < 0 ? (close > h4Basis ? "H4 upper half → basis" : "H4 basis → lower corridor") : "Range / wait for handoff"
+
+// DXY direction and SMT comparators.
+dxyClose = request.security(dxySymbol, dxyTimeframe, close, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+dxyEMA   = request.security(dxySymbol, dxyTimeframe, ta.ema(close, dxyMaLength), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+dxyAvailable = not na(dxyClose) and not na(dxyEMA)
+dxyBull = dxyAvailable and dxyClose > dxyEMA and dxyClose > dxyClose[dxyMomentum]
+dxyBear = dxyAvailable and dxyClose < dxyEMA and dxyClose < dxyClose[dxyMomentum]
+dxyLongConfirm  = not useDXY or not dxyAvailable or dxyBear
+dxyShortConfirm = not useDXY or not dxyAvailable or dxyBull
+
+smtDxyClose = request.security(dxySymbol, smtTimeframe, close, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+smtSilverClose = request.security(smtSilverSymbol, smtTimeframe, close, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+bool smtDxyAvailable = not na(smtDxyClose)
+bool smtSilverAvailable = not na(smtSilverClose)
+
+// ============================================================================
+// 5. CONFIRMED STRUCTURE, BOS/CHoCH & SMT
+// ============================================================================
+
+pivotHigh = ta.pivothigh(high, swingLength, swingLength)
+pivotLow  = ta.pivotlow(low, swingLength, swingLength)
+
+var float lastPivotHigh = na
+var float lastPivotLow  = na
+var int lastPivotHighBar = na
+var int lastPivotLowBar  = na
+var bool pivotHighBroken = false
+var bool pivotLowBroken  = false
+var int structureTrend = 0
+var int externalStructureTrend = 0
+
+// Explicit external swing classification and protected structure.
+var float previousStructureHigh = na
+var float previousStructureLow = na
+var string lastHighClass = "H?"
+var string lastLowClass = "L?"
+var float latestEqualHigh = na
+var float latestEqualLow = na
+var int latestEqualHighBar = na
+var int latestEqualLowBar = na
+var float protectedHigh = na
+var float protectedLow = na
+var int protectedHighBar = na
+var int protectedLowBar = na
+// v7 trend-maturity memory. HH+HL build bullish maturity; LH+LL build bearish maturity.
+// Opposite swing evidence decays the old run gradually instead of instantly flipping the macro bias.
+var int bullSwingRun = 0
+var int bearSwingRun = 0
+var int lastHighClassBar = na
+var int lastLowClassBar = na
+
+// Faster internal structure is tracked separately from the external M15 swing map.
+internalPivotHigh = ta.pivothigh(high, internalSwingLength, internalSwingLength)
+internalPivotLow = ta.pivotlow(low, internalSwingLength, internalSwingLength)
+var float lastInternalHigh = na
+var float lastInternalLow = na
+var bool internalHighBroken = false
+var bool internalLowBroken = false
+var int internalTrend = 0
+
+string newHighClass = ""
+string newLowClass = ""
+if not na(pivotHigh)
+    float highTolerance = math.max(nz(atr[swingLength], atr) * equalSwingToleranceAtr, syminfo.mintick)
+    newHighClass := na(previousStructureHigh) ? "H?" : pivotHigh > previousStructureHigh + highTolerance ? "HH" : pivotHigh < previousStructureHigh - highTolerance ? "LH" : "EQH"
+    lastHighClass := newHighClass
+    lastHighClassBar := bar_index - swingLength
+    if newHighClass == "HH"
+        bullSwingRun := math.min(8, bullSwingRun + 1)
+        bearSwingRun := math.max(0, bearSwingRun - 1)
+    else if newHighClass == "LH"
+        bearSwingRun := math.min(8, bearSwingRun + 1)
+        bullSwingRun := math.max(0, bullSwingRun - 1)
+    if newHighClass == "EQH"
+        latestEqualHigh := (pivotHigh + previousStructureHigh) * 0.5
+        latestEqualHighBar := bar_index - swingLength
+    previousStructureHigh := pivotHigh
+
+if not na(pivotLow)
+    float lowTolerance = math.max(nz(atr[swingLength], atr) * equalSwingToleranceAtr, syminfo.mintick)
+    newLowClass := na(previousStructureLow) ? "L?" : pivotLow > previousStructureLow + lowTolerance ? "HL" : pivotLow < previousStructureLow - lowTolerance ? "LL" : "EQL"
+    lastLowClass := newLowClass
+    lastLowClassBar := bar_index - swingLength
+    if newLowClass == "HL"
+        bullSwingRun := math.min(8, bullSwingRun + 1)
+        bearSwingRun := math.max(0, bearSwingRun - 1)
+    else if newLowClass == "LL"
+        bearSwingRun := math.min(8, bearSwingRun + 1)
+        bullSwingRun := math.max(0, bullSwingRun - 1)
+    if newLowClass == "EQL"
+        latestEqualLow := (pivotLow + previousStructureLow) * 0.5
+        latestEqualLowBar := bar_index - swingLength
+    previousStructureLow := pivotLow
+
+var float previousSmtGoldHigh = na
+var float previousSmtGoldLow = na
+var float previousSmtDxyAtHigh = na
+var float previousSmtDxyAtLow = na
+var float previousSmtSilverAtHigh = na
+var float previousSmtSilverAtLow = na
+
+bool bearishSmtDxyEvent = false
+bool bullishSmtDxyEvent = false
+bool bearishSmtSilverEvent = false
+bool bullishSmtSilverEvent = false
+
+if not na(pivotHigh)
+    float currentDxyAtHigh = smtDxyClose[swingLength]
+    float currentSilverAtHigh = smtSilverClose[swingLength]
+    bearishSmtDxyEvent := not na(previousSmtGoldHigh) and pivotHigh > previousSmtGoldHigh and not na(currentDxyAtHigh) and not na(previousSmtDxyAtHigh) and currentDxyAtHigh >= previousSmtDxyAtHigh
+    bearishSmtSilverEvent := not na(previousSmtGoldHigh) and pivotHigh > previousSmtGoldHigh and not na(currentSilverAtHigh) and not na(previousSmtSilverAtHigh) and currentSilverAtHigh <= previousSmtSilverAtHigh
+    previousSmtGoldHigh := pivotHigh
+    previousSmtDxyAtHigh := currentDxyAtHigh
+    previousSmtSilverAtHigh := currentSilverAtHigh
+
+if not na(pivotLow)
+    float currentDxyAtLow = smtDxyClose[swingLength]
+    float currentSilverAtLow = smtSilverClose[swingLength]
+    bullishSmtDxyEvent := not na(previousSmtGoldLow) and pivotLow < previousSmtGoldLow and not na(currentDxyAtLow) and not na(previousSmtDxyAtLow) and currentDxyAtLow <= previousSmtDxyAtLow
+    bullishSmtSilverEvent := not na(previousSmtGoldLow) and pivotLow < previousSmtGoldLow and not na(currentSilverAtLow) and not na(previousSmtSilverAtLow) and currentSilverAtLow >= previousSmtSilverAtLow
+    previousSmtGoldLow := pivotLow
+    previousSmtDxyAtLow := currentDxyAtLow
+    previousSmtSilverAtLow := currentSilverAtLow
+
+bool bearishSMTEvent = switch smtMode
+    "DXY" => bearishSmtDxyEvent
+    "Silver" => bearishSmtSilverEvent
+    "Both" => bearishSmtDxyEvent and bearishSmtSilverEvent
+    => bearishSmtDxyEvent or bearishSmtSilverEvent
+
+bool bullishSMTEvent = switch smtMode
+    "DXY" => bullishSmtDxyEvent
+    "Silver" => bullishSmtSilverEvent
+    "Both" => bullishSmtDxyEvent and bullishSmtSilverEvent
+    => bullishSmtDxyEvent or bullishSmtSilverEvent
+
+if not na(pivotHigh)
+    lastPivotHigh := pivotHigh
+    lastPivotHighBar := bar_index - swingLength
+    pivotHighBroken := false
+if not na(pivotLow)
+    lastPivotLow := pivotLow
+    lastPivotLowBar := bar_index - swingLength
+    pivotLowBroken := false
+
+if not na(internalPivotHigh)
+    lastInternalHigh := internalPivotHigh
+    internalHighBroken := false
+if not na(internalPivotLow)
+    lastInternalLow := internalPivotLow
+    internalLowBroken := false
+
+bool confirmationGate = not confirmedOnly or barstate.isconfirmed
+bool internalBullBreak = confirmationGate and not na(lastInternalHigh) and not internalHighBroken and close > lastInternalHigh
+bool internalBearBreak = confirmationGate and not na(lastInternalLow) and not internalLowBroken and close < lastInternalLow
+bool internalBullCHoCH = internalBullBreak and internalTrend == -1
+bool internalBearCHoCH = internalBearBreak and internalTrend == 1
+bool internalBullBOS = internalBullBreak and not internalBullCHoCH
+bool internalBearBOS = internalBearBreak and not internalBearCHoCH
+
+if internalBullBreak
+    internalHighBroken := true
+    internalTrend := 1
+if internalBearBreak
+    internalLowBroken := true
+    internalTrend := -1
+
+bool bullBreak = confirmationGate and not na(lastPivotHigh) and not pivotHighBroken and close > lastPivotHigh
+bool bearBreak = confirmationGate and not na(lastPivotLow) and not pivotLowBroken and close < lastPivotLow
+bool bullCHoCH = bullBreak and structureTrend == -1
+bool bearCHoCH = bearBreak and structureTrend == 1
+bool bullBOS = bullBreak and not bullCHoCH
+bool bearBOS = bearBreak and not bearCHoCH
+bool bullProtectedBreak = confirmationGate and externalStructureTrend == -1 and not na(protectedHigh) and close > protectedHigh
+bool bearProtectedBreak = confirmationGate and externalStructureTrend == 1 and not na(protectedLow) and close < protectedLow
+bool bullExternalCHoCH = externalStructureTrend == -1 and (bullProtectedBreak or (na(protectedHigh) and bullBreak))
+bool bearExternalCHoCH = externalStructureTrend == 1 and (bearProtectedBreak or (na(protectedLow) and bearBreak))
+bool bullExternalBOS = bullBreak and (externalStructureTrend == 1 or externalStructureTrend == 0)
+bool bearExternalBOS = bearBreak and (externalStructureTrend == -1 or externalStructureTrend == 0)
+
+var array<line> structureLines = array.new<line>()
+var array<label> structureLabels = array.new<label>()
+
+if showFullVisuals and showSwingMarks and newHighClass != ""
+    label swingClassLabel = label.new(bar_index - swingLength, pivotHigh, newHighClass, style = label.style_label_down, color = color.new(newHighClass == "HH" ? color.lime : newHighClass == "LH" ? color.red : color.orange, 15), textcolor = color.black, size = size.tiny)
+    f_add_label(structureLabels, swingClassLabel, maxStructureObjects)
+if showFullVisuals and showSwingMarks and newLowClass != ""
+    label swingClassLabel = label.new(bar_index - swingLength, pivotLow, newLowClass, style = label.style_label_up, color = color.new(newLowClass == "HL" ? color.lime : newLowClass == "LL" ? color.red : color.orange, 15), textcolor = color.black, size = size.tiny)
+    f_add_label(structureLabels, swingClassLabel, maxStructureObjects)
+
+if bullBreak
+    pivotHighBroken := true
+    if showFullVisuals and not na(lastPivotHighBar)
+        line breakLine = line.new(lastPivotHighBar, lastPivotHigh, bar_index, lastPivotHigh, xloc = xloc.bar_index,
+             color = bullCHoCH ? color.yellow : color.lime, style = bullCHoCH ? line.style_dashed : line.style_solid, width = 1)
+        f_add_line(structureLines, breakLine, maxStructureObjects)
+        label breakLabel = label.new(bar_index, lastPivotHigh, bullCHoCH ? (bullExternalCHoCH ? "X-CHoCH ↑" : "iCHoCH ↑") : "BOS ↑", style = label.style_label_up,
+             color = bullCHoCH ? color.yellow : color.lime, textcolor = color.black, size = size.tiny)
+        f_add_label(structureLabels, breakLabel, maxStructureObjects)
+    if bullExternalCHoCH or bullExternalBOS
+        if not na(lastPivotLow)
+            protectedLow := lastPivotLow
+            protectedLowBar := lastPivotLowBar
+        if bullExternalCHoCH
+            protectedHigh := na
+            protectedHighBar := na
+        externalStructureTrend := 1
+    structureTrend := 1
+
+if bearBreak
+    pivotLowBroken := true
+    if showFullVisuals and not na(lastPivotLowBar)
+        line breakLine = line.new(lastPivotLowBar, lastPivotLow, bar_index, lastPivotLow, xloc = xloc.bar_index,
+             color = bearCHoCH ? color.yellow : color.red, style = bearCHoCH ? line.style_dashed : line.style_solid, width = 1)
+        f_add_line(structureLines, breakLine, maxStructureObjects)
+        label breakLabel = label.new(bar_index, lastPivotLow, bearCHoCH ? (bearExternalCHoCH ? "X-CHoCH ↓" : "iCHoCH ↓") : "BOS ↓", style = label.style_label_down,
+             color = bearCHoCH ? color.yellow : color.red, textcolor = color.white, size = size.tiny)
+        f_add_label(structureLabels, breakLabel, maxStructureObjects)
+    if bearExternalCHoCH or bearExternalBOS
+        if not na(lastPivotHigh)
+            protectedHigh := lastPivotHigh
+            protectedHighBar := lastPivotHighBar
+        if bearExternalCHoCH
+            protectedLow := na
+            protectedLowBar := na
+        externalStructureTrend := -1
+    structureTrend := -1
+
+// A protected-level break can occur after an earlier internal pivot was already consumed.
+// Handle that direct external transition even when the legacy pivot-break flag has no new event on this bar.
+if bullExternalCHoCH and not bullBreak
+    if not na(lastPivotLow)
+        protectedLow := lastPivotLow
+        protectedLowBar := lastPivotLowBar
+    if showFullVisuals and not na(protectedHigh)
+        label extLabel = label.new(bar_index, protectedHigh, "X-CHoCH ↑", style = label.style_label_up, color = color.new(color.yellow, 0), textcolor = color.black, size = size.tiny)
+        f_add_label(structureLabels, extLabel, maxStructureObjects)
+    protectedHigh := na
+    protectedHighBar := na
+    externalStructureTrend := 1
+    structureTrend := 1
+
+if bearExternalCHoCH and not bearBreak
+    if not na(lastPivotHigh)
+        protectedHigh := lastPivotHigh
+        protectedHighBar := lastPivotHighBar
+    if showFullVisuals and not na(protectedLow)
+        label extLabel = label.new(bar_index, protectedLow, "X-CHoCH ↓", style = label.style_label_down, color = color.new(color.yellow, 0), textcolor = color.black, size = size.tiny)
+        f_add_label(structureLabels, extLabel, maxStructureObjects)
+    protectedLow := na
+    protectedLowBar := na
+    externalStructureTrend := -1
+    structureTrend := -1
+
+// No extra plotshape calls are needed: Full mode uses labels for HH/HL/LH/LL/EQH/EQL, keeping plot count lean.
+bool recentBullInternalCHoCH = f_recent(internalBullCHoCH, structureFresh)
+bool recentBearInternalCHoCH = f_recent(internalBearCHoCH, structureFresh)
+bool recentBullInternalBOS = f_recent(internalBullBOS, structureFresh)
+bool recentBearInternalBOS = f_recent(internalBearBOS, structureFresh)
+bool recentBullExternalCHoCH = f_recent(bullExternalCHoCH, structureFresh)
+bool recentBearExternalCHoCH = f_recent(bearExternalCHoCH, structureFresh)
+bool recentBullExternalBOS = f_recent(bullExternalBOS, structureFresh)
+bool recentBearExternalBOS = f_recent(bearExternalBOS, structureFresh)
+bool protectedLowIntact = not na(protectedLow) and close > protectedLow
+bool protectedHighIntact = not na(protectedHigh) and close < protectedHigh
+
+// ============================================================================
+// 6. FVG & ORDER-BLOCK RECORDS — CALCULATED IN ALL MODES, DRAWN ONLY IN FULL
+// ============================================================================
+
+var array<float> fvgTops = array.new_float()
+var array<float> fvgBottoms = array.new_float()
+var array<int> fvgDirections = array.new_int()
+var array<int> fvgCreatedBars = array.new_int()
+var array<box> fvgBoxes = array.new<box>()
+
+bool bullFVG = confirmationGate and bar_index >= 2 and low > high[2] and (low - high[2]) >= atr * fvgAtrMinimum
+bool bearFVG = confirmationGate and bar_index >= 2 and high < low[2] and (low[2] - high) >= atr * fvgAtrMinimum
+
+if bullFVG
+    array.push(fvgTops, low)
+    array.push(fvgBottoms, high[2])
+    array.push(fvgDirections, 1)
+    array.push(fvgCreatedBars, bar_index)
+    box visual = na
+    if showFullVisuals
+        visual := box.new(bar_index - 2, low, bar_index, high[2], xloc = xloc.bar_index, extend = extend.right,
+             border_color = color.new(color.lime, 45), bgcolor = color.new(color.lime, 88), text = "FVG", text_color = color.lime, text_size = size.tiny)
+    array.push(fvgBoxes, visual)
+
+if bearFVG
+    array.push(fvgTops, low[2])
+    array.push(fvgBottoms, high)
+    array.push(fvgDirections, -1)
+    array.push(fvgCreatedBars, bar_index)
+    box visual = na
+    if showFullVisuals
+        visual := box.new(bar_index - 2, low[2], bar_index, high, xloc = xloc.bar_index, extend = extend.right,
+             border_color = color.new(color.red, 45), bgcolor = color.new(color.red, 88), text = "FVG", text_color = color.red, text_size = size.tiny)
+    array.push(fvgBoxes, visual)
+
+while array.size(fvgTops) > maxFVGs
+    array.shift(fvgTops)
+    array.shift(fvgBottoms)
+    array.shift(fvgDirections)
+    array.shift(fvgCreatedBars)
+    box oldVisual = array.shift(fvgBoxes)
+    if not na(oldVisual)
+        box.delete(oldVisual)
+
+int fvgIndex = array.size(fvgTops) - 1
+while fvgIndex >= 0
+    float zoneTop = array.get(fvgTops, fvgIndex)
+    float zoneBottom = array.get(fvgBottoms, fvgIndex)
+    int direction = array.get(fvgDirections, fvgIndex)
+    bool fullyFilled = direction == 1 ? low <= zoneBottom : high >= zoneTop
+    if fullyFilled
+        box visual = array.get(fvgBoxes, fvgIndex)
+        if not na(visual)
+            box.delete(visual)
+        array.remove(fvgTops, fvgIndex)
+        array.remove(fvgBottoms, fvgIndex)
+        array.remove(fvgDirections, fvgIndex)
+        array.remove(fvgCreatedBars, fvgIndex)
+        array.remove(fvgBoxes, fvgIndex)
+    fvgIndex -= 1
+
+var array<float> obTops = array.new_float()
+var array<float> obBottoms = array.new_float()
+var array<int> obDirections = array.new_int()
+var array<int> obCreatedBars = array.new_int()
+var array<box> obBoxes = array.new<box>()
+
+if bullBreak
+    int obOffset = f_last_opposite_offset(true, obLookback)
+    if not na(obOffset)
+        float obTop = obUseWicks ? high[obOffset] : math.max(open[obOffset], close[obOffset])
+        float obBottom = obUseWicks ? low[obOffset] : math.min(open[obOffset], close[obOffset])
+        array.push(obTops, obTop)
+        array.push(obBottoms, obBottom)
+        array.push(obDirections, 1)
+        array.push(obCreatedBars, bar_index)
+        box visual = na
+        if showFullVisuals
+            visual := box.new(bar_index - obOffset, obTop, bar_index, obBottom, xloc = xloc.bar_index, extend = extend.right,
+                 border_color = color.new(color.green, 30), bgcolor = color.new(color.green, 86), text = "Bull OB", text_color = color.lime, text_size = size.tiny)
+        array.push(obBoxes, visual)
+
+if bearBreak
+    int obOffset = f_last_opposite_offset(false, obLookback)
+    if not na(obOffset)
+        float obTop = obUseWicks ? high[obOffset] : math.max(open[obOffset], close[obOffset])
+        float obBottom = obUseWicks ? low[obOffset] : math.min(open[obOffset], close[obOffset])
+        array.push(obTops, obTop)
+        array.push(obBottoms, obBottom)
+        array.push(obDirections, -1)
+        array.push(obCreatedBars, bar_index)
+        box visual = na
+        if showFullVisuals
+            visual := box.new(bar_index - obOffset, obTop, bar_index, obBottom, xloc = xloc.bar_index, extend = extend.right,
+                 border_color = color.new(color.maroon, 20), bgcolor = color.new(color.red, 86), text = "Bear OB", text_color = color.red, text_size = size.tiny)
+        array.push(obBoxes, visual)
+
+while array.size(obTops) > maxOrderBlocks
+    array.shift(obTops)
+    array.shift(obBottoms)
+    array.shift(obDirections)
+    array.shift(obCreatedBars)
+    box oldVisual = array.shift(obBoxes)
+    if not na(oldVisual)
+        box.delete(oldVisual)
+
+int obIndex = array.size(obTops) - 1
+while obIndex >= 0
+    float zoneTop = array.get(obTops, obIndex)
+    float zoneBottom = array.get(obBottoms, obIndex)
+    int direction = array.get(obDirections, obIndex)
+    bool invalidated = direction == 1 ? (obInvalidation == "Close" ? close < zoneBottom : low < zoneBottom) : (obInvalidation == "Close" ? close > zoneTop : high > zoneTop)
+    if invalidated
+        box visual = array.get(obBoxes, obIndex)
+        if not na(visual)
+            box.delete(visual)
+        array.remove(obTops, obIndex)
+        array.remove(obBottoms, obIndex)
+        array.remove(obDirections, obIndex)
+        array.remove(obCreatedBars, obIndex)
+        array.remove(obBoxes, obIndex)
+    obIndex -= 1
+
+bool inBullFVG = false
+bool inBearFVG = false
+int latestBullFvgBar = na
+int latestBearFvgBar = na
+int fvgCheck = 0
+while fvgCheck < array.size(fvgTops)
+    float zoneTop = array.get(fvgTops, fvgCheck)
+    float zoneBottom = array.get(fvgBottoms, fvgCheck)
+    int direction = array.get(fvgDirections, fvgCheck)
+    int createdBar = array.get(fvgCreatedBars, fvgCheck)
+    bool inside = high >= zoneBottom and low <= zoneTop
+    inBullFVG := inBullFVG or (inside and direction == 1)
+    inBearFVG := inBearFVG or (inside and direction == -1)
+    if direction == 1
+        latestBullFvgBar := na(latestBullFvgBar) ? createdBar : math.max(latestBullFvgBar, createdBar)
+    else
+        latestBearFvgBar := na(latestBearFvgBar) ? createdBar : math.max(latestBearFvgBar, createdBar)
+    fvgCheck += 1
+
+bool inBullOB = false
+bool inBearOB = false
+int latestBullObBar = na
+int latestBearObBar = na
+int obCheck = 0
+while obCheck < array.size(obTops)
+    float zoneTop = array.get(obTops, obCheck)
+    float zoneBottom = array.get(obBottoms, obCheck)
+    int direction = array.get(obDirections, obCheck)
+    int createdBar = array.get(obCreatedBars, obCheck)
+    bool inside = high >= zoneBottom and low <= zoneTop
+    inBullOB := inBullOB or (inside and direction == 1)
+    inBearOB := inBearOB or (inside and direction == -1)
+    if direction == 1
+        latestBullObBar := na(latestBullObBar) ? createdBar : math.max(latestBullObBar, createdBar)
+    else
+        latestBearObBar := na(latestBearObBar) ? createdBar : math.max(latestBearObBar, createdBar)
+    obCheck += 1
+
+// ============================================================================
+// 7. SESSION RANGES, DAILY/WEEKLY LEVELS & WEEKLY PROFILE ENGINE
+// ============================================================================
+
+bool inAsia = not na(time(timeframe.period, asiaSession, sessionTimezone))
+bool inLondon = not na(time(timeframe.period, londonSession, sessionTimezone))
+bool inLondonKillzone = not na(time(timeframe.period, londonKillzone, sessionTimezone))
+bool inNewYork = not na(time(timeframe.period, newYorkSession, sessionTimezone))
+
+var float asiaHigh = na
+var float asiaLow = na
+var float londonHigh = na
+var float londonLow = na
+var float newYorkHigh = na
+var float newYorkLow = na
+
+bool newAsia = inAsia and not inAsia[1]
+bool newLondon = inLondon and not inLondon[1]
+bool newNewYork = inNewYork and not inNewYork[1]
+
+if newAsia
+    asiaHigh := high
+    asiaLow := low
+else if inAsia
+    asiaHigh := math.max(nz(asiaHigh, high), high)
+    asiaLow := math.min(nz(asiaLow, low), low)
+
+if newLondon
+    londonHigh := high
+    londonLow := low
+else if inLondon
+    londonHigh := math.max(nz(londonHigh, high), high)
+    londonLow := math.min(nz(londonLow, low), low)
+
+if newNewYork
+    newYorkHigh := high
+    newYorkLow := low
+else if inNewYork
+    newYorkHigh := math.max(nz(newYorkHigh, high), high)
+    newYorkLow := math.min(nz(newYorkLow, low), low)
+
+previousDayHigh = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+previousDayLow = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+previousWeekHigh = request.security(syminfo.tickerid, "W", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+previousWeekLow = request.security(syminfo.tickerid, "W", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+dailyATR = request.security(syminfo.tickerid, "D", ta.atr(14)[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+
+plot(showStandardVisuals ? asiaHigh : na, "Asia High", color = color.new(color.blue, 25), style = plot.style_linebr)
+plot(showStandardVisuals ? asiaLow : na, "Asia Low", color = color.new(color.blue, 25), style = plot.style_linebr)
+plot(showFullVisuals ? londonHigh : na, "London High", color = color.new(color.orange, 35), style = plot.style_linebr)
+plot(showFullVisuals ? londonLow : na, "London Low", color = color.new(color.orange, 35), style = plot.style_linebr)
+plot(showFullVisuals ? newYorkHigh : na, "New York High", color = color.new(color.purple, 35), style = plot.style_linebr)
+plot(showFullVisuals ? newYorkLow : na, "New York Low", color = color.new(color.purple, 35), style = plot.style_linebr)
+plot(showStandardVisuals ? previousDayHigh : na, "Previous Day High", color = color.new(color.fuchsia, 35), style = plot.style_linebr)
+plot(showStandardVisuals ? previousDayLow : na, "Previous Day Low", color = color.new(color.fuchsia, 35), style = plot.style_linebr)
+plot(showFullVisuals ? previousWeekHigh : na, "Previous Week High", color = color.new(color.yellow, 45), style = plot.style_linebr)
+plot(showFullVisuals ? previousWeekLow : na, "Previous Week Low", color = color.new(color.yellow, 45), style = plot.style_linebr)
+
+bool newDay = ta.change(time("D")) != 0
+var float mondayHigh = na
+var float mondayLow = na
+var float mondayClose = na
+var float tuesdayHigh = na
+var float tuesdayLow = na
+var float tuesdayClose = na
+var float wednesdayHigh = na
+var float wednesdayLow = na
+var float wednesdayClose = na
+var float thursdayHigh = na
+var float thursdayLow = na
+var float fridayHigh = na
+var float fridayLow = na
+var float previousThursdayHigh = na
+var float previousFridayHigh = na
+var float previousFridayLow = na
+
+if newDay and dayofweek == dayofweek.monday
+    previousThursdayHigh := thursdayHigh
+    previousFridayHigh := fridayHigh
+    previousFridayLow := fridayLow
+    mondayHigh := na
+    mondayLow := na
+    mondayClose := na
+    tuesdayHigh := na
+    tuesdayLow := na
+    tuesdayClose := na
+    wednesdayHigh := na
+    wednesdayLow := na
+    wednesdayClose := na
+    thursdayHigh := na
+    thursdayLow := na
+    fridayHigh := na
+    fridayLow := na
+
+if dayofweek == dayofweek.monday
+    mondayHigh := na(mondayHigh) ? high : math.max(mondayHigh, high)
+    mondayLow := na(mondayLow) ? low : math.min(mondayLow, low)
+    mondayClose := close
+if dayofweek == dayofweek.tuesday
+    tuesdayHigh := na(tuesdayHigh) ? high : math.max(tuesdayHigh, high)
+    tuesdayLow := na(tuesdayLow) ? low : math.min(tuesdayLow, low)
+    tuesdayClose := close
+if dayofweek == dayofweek.wednesday
+    wednesdayHigh := na(wednesdayHigh) ? high : math.max(wednesdayHigh, high)
+    wednesdayLow := na(wednesdayLow) ? low : math.min(wednesdayLow, low)
+    wednesdayClose := close
+if dayofweek == dayofweek.thursday
+    thursdayHigh := na(thursdayHigh) ? high : math.max(thursdayHigh, high)
+    thursdayLow := na(thursdayLow) ? low : math.min(thursdayLow, low)
+if dayofweek == dayofweek.friday
+    fridayHigh := na(fridayHigh) ? high : math.max(fridayHigh, high)
+    fridayLow := na(fridayLow) ? low : math.min(fridayLow, low)
+
+float earlyWeekLow = not na(mondayLow) and not na(tuesdayLow) ? math.min(mondayLow, tuesdayLow) : na
+float earlyWeekHigh = not na(mondayHigh) and not na(tuesdayHigh) ? math.max(mondayHigh, tuesdayHigh) : na
+bool mondayAboveWednesday = not na(mondayHigh) and not na(wednesdayHigh) and mondayHigh > wednesdayHigh
+bool bullishWednesdayFailure = not na(earlyWeekLow) and not na(wednesdayLow) and not na(wednesdayClose) and (wednesdayLow > earlyWeekLow or (wednesdayLow < earlyWeekLow and wednesdayClose > earlyWeekLow))
+bool wednesdayInsideTuesday = not na(tuesdayHigh) and not na(tuesdayLow) and not na(wednesdayHigh) and not na(wednesdayLow) and wednesdayHigh <= tuesdayHigh and wednesdayLow >= tuesdayLow
+float monWedHigh = not na(mondayHigh) and not na(tuesdayHigh) and not na(wednesdayHigh) ? math.max(mondayHigh, math.max(tuesdayHigh, wednesdayHigh)) : na
+float monWedLow = not na(mondayLow) and not na(tuesdayLow) and not na(wednesdayLow) ? math.min(mondayLow, math.min(tuesdayLow, wednesdayLow)) : na
+float monWedRange = not na(monWedHigh) and not na(monWedLow) ? monWedHigh - monWedLow : na
+bool threeDayCompression = not na(monWedRange) and not na(dailyATR) and dailyATR > 0 and monWedRange <= dailyATR * compressionAtrMax
+bool thursdayBearishProfile = dayofweek == dayofweek.thursday and mondayAboveWednesday
+bool thursdayBullishProfile = dayofweek == dayofweek.thursday and bullishWednesdayFailure
+bool thursdayRaidProfile = dayofweek == dayofweek.thursday and (threeDayCompression or wednesdayInsideTuesday)
+bool mondayFridayLowMagnet = dayofweek == dayofweek.monday and not na(previousThursdayHigh) and not na(previousFridayHigh) and previousThursdayHigh > previousFridayHigh
+
+string weeklyProfile = wednesdayInsideTuesday ? "Wednesday inside Tuesday — Thu expansion" : threeDayCompression ? "Mon–Wed compression — raid expected" : thursdayBearishProfile ? "Thursday bearish weekly reversal" : thursdayBullishProfile ? "Thursday bullish weekly reversal" : mondayFridayLowMagnet ? "Monday Friday-low magnet" : mondayAboveWednesday ? "Mon high > Wed high" : bullishWednesdayFailure ? "Mid-week bullish exhaustion" : "No dominant weekly profile"
+
+// ============================================================================
+// 8. LIQUIDITY SWEEPS
+// ============================================================================
+
+bool equalHighActive = not na(latestEqualHigh) and not na(latestEqualHighBar) and bar_index - latestEqualHighBar <= equalSwingFreshBars
+bool equalLowActive = not na(latestEqualLow) and not na(latestEqualLowBar) and bar_index - latestEqualLowBar <= equalSwingFreshBars
+bool bullEqualLowSweep = confirmationGate and equalLowActive and low < latestEqualLow and close > latestEqualLow
+bool bearEqualHighSweep = confirmationGate and equalHighActive and high > latestEqualHigh and close < latestEqualHigh
+bool bullProtectedLowSweep = confirmationGate and not na(protectedLow) and low < protectedLow and close > protectedLow
+bool bearProtectedHighSweep = confirmationGate and not na(protectedHigh) and high > protectedHigh and close < protectedHigh
+bool bullSwingSweep = confirmationGate and not na(lastPivotLow) and low < lastPivotLow and close > lastPivotLow
+bool bearSwingSweep = confirmationGate and not na(lastPivotHigh) and high > lastPivotHigh and close < lastPivotHigh
+bool bullAsiaSweep = confirmationGate and not inAsia and not na(asiaLow) and low < asiaLow and close > asiaLow
+bool bearAsiaSweep = confirmationGate and not inAsia and not na(asiaHigh) and high > asiaHigh and close < asiaHigh
+bool bullLondonAsiaSweep = bullAsiaSweep and inLondonKillzone
+bool bearLondonAsiaSweep = bearAsiaSweep and inLondonKillzone
+bool bullPDLSweep = confirmationGate and low < previousDayLow and close > previousDayLow
+bool bearPDHSweep = confirmationGate and high > previousDayHigh and close < previousDayHigh
+bool bullPWLSweep = confirmationGate and low < previousWeekLow and close > previousWeekLow
+bool bearPWHSweep = confirmationGate and high > previousWeekHigh and close < previousWeekHigh
+bool bullMondaySweep = confirmationGate and not na(mondayLow) and low < mondayLow and close > mondayLow
+bool bearMondaySweep = confirmationGate and not na(mondayHigh) and high > mondayHigh and close < mondayHigh
+
+bool bullLiquiditySweep = bullSwingSweep or bullEqualLowSweep or bullProtectedLowSweep or bullAsiaSweep or bullPDLSweep or bullPWLSweep or bullMondaySweep
+bool bearLiquiditySweep = bearSwingSweep or bearEqualHighSweep or bearProtectedHighSweep or bearAsiaSweep or bearPDHSweep or bearPWHSweep or bearMondaySweep
+
+var array<label> eventLabels = array.new<label>()
+if showStandardVisuals and showLiquidityLabels and bullLiquiditySweep
+    label item = label.new(bar_index, low, bullLondonAsiaSweep ? "LONDON ASIA-LOW SWEEP\nREVERSAL WATCH" : "SELL-SIDE SWEEP\nREVERSAL WATCH", style = label.style_label_up, color = color.new(color.lime, 5), textcolor = color.black, size = size.tiny)
+    f_add_label(eventLabels, item, maxSignalLabels)
+if showStandardVisuals and showLiquidityLabels and bearLiquiditySweep
+    label item = label.new(bar_index, high, bearLondonAsiaSweep ? "LONDON ASIA-HIGH SWEEP\nREVERSAL WATCH" : "BUY-SIDE SWEEP\nREVERSAL WATCH", style = label.style_label_down, color = color.new(color.red, 5), textcolor = color.white, size = size.tiny)
+    f_add_label(eventLabels, item, maxSignalLabels)
+
+// ============================================================================
+// 9. AUTOMATIC SMC DEALING RANGES & FIBONACCI OTE
+// ============================================================================
+
+var int bullishFibState = 0
+var int bearishFibState = 0
+var float bullishFibLow = na
+var float bullishFibHigh = na
+var float bearishFibHigh = na
+var float bearishFibLow = na
+var int bullishFibStartBar = na
+var int bearishFibStartBar = na
+var int bullishFibConfirmBar = na
+var int bearishFibConfirmBar = na
+var int bullishOteFirstTouchBar = na
+var int bearishOteFirstTouchBar = na
+
+if bullLiquiditySweep
+    bullishFibState := 1
+    bullishFibLow := low
+    bullishFibHigh := high
+    bullishFibStartBar := bar_index
+    bullishFibConfirmBar := na
+    bullishOteFirstTouchBar := na
+if bearLiquiditySweep
+    bearishFibState := 1
+    bearishFibHigh := high
+    bearishFibLow := low
+    bearishFibStartBar := bar_index
+    bearishFibConfirmBar := na
+    bearishOteFirstTouchBar := na
+
+if bullishFibState > 0
+    float priorHigh = bullishFibHigh
+    bullishFibHigh := math.max(nz(bullishFibHigh, high), high)
+    if bullishFibState >= 2 and bullishFibHigh > nz(priorHigh, bullishFibHigh)
+        bullishOteFirstTouchBar := na
+    if low < bullishFibLow or bar_index - bullishFibStartBar > fibSetupExpiryBars
+        bullishFibState := 0
+        bullishFibLow := na
+        bullishFibHigh := na
+        bullishFibConfirmBar := na
+        bullishOteFirstTouchBar := na
+    else if bullishFibState == 1 and bullBreak
+        bullishFibState := 2
+        bullishFibConfirmBar := bar_index
+    else if bullishFibState == 2 and not na(bullishFibConfirmBar) and bar_index > bullishFibConfirmBar and close < open
+        bullishFibState := 3
+
+if bearishFibState > 0
+    float priorLow = bearishFibLow
+    bearishFibLow := math.min(nz(bearishFibLow, low), low)
+    if bearishFibState >= 2 and bearishFibLow < nz(priorLow, bearishFibLow)
+        bearishOteFirstTouchBar := na
+    if high > bearishFibHigh or bar_index - bearishFibStartBar > fibSetupExpiryBars
+        bearishFibState := 0
+        bearishFibHigh := na
+        bearishFibLow := na
+        bearishFibConfirmBar := na
+        bearishOteFirstTouchBar := na
+    else if bearishFibState == 1 and bearBreak
+        bearishFibState := 2
+        bearishFibConfirmBar := bar_index
+    else if bearishFibState == 2 and not na(bearishFibConfirmBar) and bar_index > bearishFibConfirmBar and close > open
+        bearishFibState := 3
+
+float bullishFibRange = bullishFibState >= 2 and not na(bullishFibLow) and not na(bullishFibHigh) ? bullishFibHigh - bullishFibLow : na
+float bearishFibRange = bearishFibState >= 2 and not na(bearishFibHigh) and not na(bearishFibLow) ? bearishFibHigh - bearishFibLow : na
+bool bullishFibReady = not na(bullishFibRange) and bullishFibRange > syminfo.mintick
+bool bearishFibReady = not na(bearishFibRange) and bearishFibRange > syminfo.mintick
+
+float bullishFib50 = bullishFibReady ? bullishFibHigh - bullishFibRange * 0.500 : na
+float bullishFib618 = bullishFibReady ? bullishFibHigh - bullishFibRange * 0.618 : na
+float bullishFib705 = bullishFibReady ? bullishFibHigh - bullishFibRange * 0.705 : na
+float bullishFib786 = bullishFibReady ? bullishFibHigh - bullishFibRange * 0.786 : na
+float bearishFib50 = bearishFibReady ? bearishFibLow + bearishFibRange * 0.500 : na
+float bearishFib618 = bearishFibReady ? bearishFibLow + bearishFibRange * 0.618 : na
+float bearishFib705 = bearishFibReady ? bearishFibLow + bearishFibRange * 0.705 : na
+float bearishFib786 = bearishFibReady ? bearishFibLow + bearishFibRange * 0.786 : na
+
+float fibTouchTolerance = atr * fibToleranceAtr
+bool insideBullishOTE = bullishFibReady and bullishFibState == 3 and high >= bullishFib786 - fibTouchTolerance and low <= bullishFib618 + fibTouchTolerance
+bool insideBearishOTE = bearishFibReady and bearishFibState == 3 and high >= bearishFib618 - fibTouchTolerance and low <= bearishFib786 + fibTouchTolerance
+if insideBullishOTE and na(bullishOteFirstTouchBar) and bar_index > nz(bullishFibConfirmBar, bar_index - 1)
+    bullishOteFirstTouchBar := bar_index
+if insideBearishOTE and na(bearishOteFirstTouchBar) and bar_index > nz(bearishFibConfirmBar, bar_index - 1)
+    bearishOteFirstTouchBar := bar_index
+bool bullishOteFresh = not na(bullishOteFirstTouchBar) and bar_index - bullishOteFirstTouchBar <= fibEntryFreshBars
+bool bearishOteFresh = not na(bearishOteFirstTouchBar) and bar_index - bearishOteFirstTouchBar <= fibEntryFreshBars
+bool bullishFibLocation = bullishFibReady and bullishOteFresh and close >= bullishFib786 - fibTouchTolerance and close <= bullishFib618 + atr * maxEntryDistanceAtr
+bool bearishFibLocation = bearishFibReady and bearishOteFresh and close <= bearishFib786 + fibTouchTolerance and close >= bearishFib618 - atr * maxEntryDistanceAtr
+bool bullishDiscount = not bullishFibReady or close <= bullishFib50 + fibTouchTolerance
+bool bearishPremium = not bearishFibReady or close >= bearishFib50 - fibTouchTolerance
+
+pBullFib50 = plot(showStandardVisuals and bullishFibReady ? bullishFib50 : na, "Bull Fib 50%", color = color.new(color.lime, 70), style = plot.style_linebr)
+pBullFib618 = plot(showStandardVisuals and bullishFibReady ? bullishFib618 : na, "Bull Fib 61.8%", color = color.new(color.lime, 45), style = plot.style_linebr)
+pBullFib705 = plot(showStandardVisuals and bullishFibReady ? bullishFib705 : na, "Bull Fib 70.5%", color = color.new(color.yellow, 0), linewidth = 2, style = plot.style_linebr)
+pBullFib786 = plot(showStandardVisuals and bullishFibReady ? bullishFib786 : na, "Bull Fib 78.6%", color = color.new(color.lime, 45), style = plot.style_linebr)
+fill(pBullFib618, pBullFib786, color = showStandardVisuals and bullishFibReady ? color.new(color.lime, 92) : na, title = "Bullish OTE")
+pBearFib50 = plot(showStandardVisuals and bearishFibReady ? bearishFib50 : na, "Bear Fib 50%", color = color.new(color.red, 70), style = plot.style_linebr)
+pBearFib618 = plot(showStandardVisuals and bearishFibReady ? bearishFib618 : na, "Bear Fib 61.8%", color = color.new(color.red, 45), style = plot.style_linebr)
+pBearFib705 = plot(showStandardVisuals and bearishFibReady ? bearishFib705 : na, "Bear Fib 70.5%", color = color.new(color.yellow, 0), linewidth = 2, style = plot.style_linebr)
+pBearFib786 = plot(showStandardVisuals and bearishFibReady ? bearishFib786 : na, "Bear Fib 78.6%", color = color.new(color.red, 45), style = plot.style_linebr)
+fill(pBearFib618, pBearFib786, color = showStandardVisuals and bearishFibReady ? color.new(color.red, 92) : na, title = "Bearish OTE")
+
+// ============================================================================
+// 10. ORIGINAL CORE CONFLUENCE SCORE — PRESERVED
+// ============================================================================
+
+int longTrendScore = (close > ma200 ? 6 : 0) + (close > ma2000 ? 6 : 0) + (ma200 > ma200[maSlopeBars] ? 4 : 0) + (htfBull ? 4 : 0)
+int shortTrendScore = (close < ma200 ? 6 : 0) + (close < ma2000 ? 6 : 0) + (ma200 < ma200[maSlopeBars] ? 4 : 0) + (htfBear ? 4 : 0)
+
+bool recentBullBreak = f_recent(bullBreak, structureFresh)
+bool recentBearBreak = f_recent(bearBreak, structureFresh)
+bool recentBullCHoCH = f_recent(bullCHoCH, structureFresh)
+bool recentBearCHoCH = f_recent(bearCHoCH, structureFresh)
+int longStructureScore = (structureTrend == 1 ? 10 : 0) + (recentBullBreak ? 5 : 0) + (recentBullCHoCH ? 5 : 0)
+int shortStructureScore = (structureTrend == -1 ? 10 : 0) + (recentBearBreak ? 5 : 0) + (recentBearCHoCH ? 5 : 0)
+
+bool recentBullSweep = f_recent(bullLiquiditySweep, liquidityFresh)
+bool recentBearSweep = f_recent(bearLiquiditySweep, liquidityFresh)
+bool recentBullAsiaSweep = f_recent(bullAsiaSweep, liquidityFresh)
+bool recentBearAsiaSweep = f_recent(bearAsiaSweep, liquidityFresh)
+bool recentBullPDLSweep = f_recent(bullPDLSweep, liquidityFresh)
+bool recentBearPDHSweep = f_recent(bearPDHSweep, liquidityFresh)
+int longLiquidityScore = (recentBullSweep ? 12 : 0) + (recentBullAsiaSweep ? 4 : 0) + (recentBullPDLSweep ? 4 : 0)
+int shortLiquidityScore = (recentBearSweep ? 12 : 0) + (recentBearAsiaSweep ? 4 : 0) + (recentBearPDHSweep ? 4 : 0)
+
+bool nearMA200 = math.abs(close - ma200) <= atr * 0.35
+int longZoneScore = (inBullOB ? 6 : 0) + (inBullFVG ? 5 : 0) + ((nearMA200 or low <= bbLower) ? 4 : 0)
+int shortZoneScore = (inBearOB ? 6 : 0) + (inBearFVG ? 5 : 0) + ((nearMA200 or high >= bbUpper) ? 4 : 0)
+
+bool bullBandReentry = low < bbLower and close > bbLower
+bool bearBandReentry = high > bbUpper and close < bbUpper
+int longBBScore = (bullBandReentry ? 6 : 0) + (close > bbBasis ? 4 : 0)
+int shortBBScore = (bearBandReentry ? 6 : 0) + (close < bbBasis ? 4 : 0)
+
+int longVolumeScore = (highRelativeVolume ? 6 : 0) + (bullishDisplacement ? 4 : 0)
+int shortVolumeScore = (highRelativeVolume ? 6 : 0) + (bearishDisplacement ? 4 : 0)
+int longDXYScore = dxyLongConfirm ? 5 : 0
+int shortDXYScore = dxyShortConfirm ? 5 : 0
+
+int longScore = math.min(100, longTrendScore + longStructureScore + longLiquidityScore + longZoneScore + longBBScore + longVolumeScore + longDXYScore)
+int shortScore = math.min(100, shortTrendScore + shortStructureScore + shortLiquidityScore + shortZoneScore + shortBBScore + shortVolumeScore + shortDXYScore)
+
+// ============================================================================
+// 11. LIQUIDITY OBJECTIVE TRANSITION ENGINE — TARGET HIT, THEN WHAT?
+// ============================================================================
+
+float nearestAbove = na
+string nearestAboveName = "None"
+if not na(asiaHigh) and asiaHigh > close and (na(nearestAbove) or asiaHigh < nearestAbove)
+    nearestAbove := asiaHigh
+    nearestAboveName := "Asia High"
+if not na(londonHigh) and londonHigh > close and (na(nearestAbove) or londonHigh < nearestAbove)
+    nearestAbove := londonHigh
+    nearestAboveName := "London High"
+if not na(previousDayHigh) and previousDayHigh > close and (na(nearestAbove) or previousDayHigh < nearestAbove)
+    nearestAbove := previousDayHigh
+    nearestAboveName := "Previous-Day High"
+if not na(mondayHigh) and mondayHigh > close and (na(nearestAbove) or mondayHigh < nearestAbove)
+    nearestAbove := mondayHigh
+    nearestAboveName := "Monday High"
+if not na(previousWeekHigh) and previousWeekHigh > close and (na(nearestAbove) or previousWeekHigh < nearestAbove)
+    nearestAbove := previousWeekHigh
+    nearestAboveName := "Previous-Week High"
+if not na(lastPivotHigh) and lastPivotHigh > close and (na(nearestAbove) or lastPivotHigh < nearestAbove)
+    nearestAbove := lastPivotHigh
+    nearestAboveName := "Swing Buy-Side"
+if equalHighActive and latestEqualHigh > close and (na(nearestAbove) or latestEqualHigh < nearestAbove)
+    nearestAbove := latestEqualHigh
+    nearestAboveName := "Equal-High Liquidity"
+if useMTFCascade and not na(mtfLongTarget) and mtfLongTarget > close and (na(nearestAbove) or mtfLongTarget < nearestAbove)
+    nearestAbove := mtfLongTarget
+    nearestAboveName := mtfLongTargetName
+
+float nearestBelow = na
+string nearestBelowName = "None"
+if not na(asiaLow) and asiaLow < close and (na(nearestBelow) or asiaLow > nearestBelow)
+    nearestBelow := asiaLow
+    nearestBelowName := "Asia Low"
+if not na(londonLow) and londonLow < close and (na(nearestBelow) or londonLow > nearestBelow)
+    nearestBelow := londonLow
+    nearestBelowName := "London Low"
+if not na(previousDayLow) and previousDayLow < close and (na(nearestBelow) or previousDayLow > nearestBelow)
+    nearestBelow := previousDayLow
+    nearestBelowName := "Previous-Day Low"
+if not na(mondayLow) and mondayLow < close and (na(nearestBelow) or mondayLow > nearestBelow)
+    nearestBelow := mondayLow
+    nearestBelowName := "Monday Low"
+if not na(previousWeekLow) and previousWeekLow < close and (na(nearestBelow) or previousWeekLow > nearestBelow)
+    nearestBelow := previousWeekLow
+    nearestBelowName := "Previous-Week Low"
+if not na(lastPivotLow) and lastPivotLow < close and (na(nearestBelow) or lastPivotLow > nearestBelow)
+    nearestBelow := lastPivotLow
+    nearestBelowName := "Swing Sell-Side"
+if equalLowActive and latestEqualLow < close and (na(nearestBelow) or latestEqualLow > nearestBelow)
+    nearestBelow := latestEqualLow
+    nearestBelowName := "Equal-Low Liquidity"
+if useMTFCascade and not na(mtfShortTarget) and mtfShortTarget < close and (na(nearestBelow) or mtfShortTarget > nearestBelow)
+    nearestBelow := mtfShortTarget
+    nearestBelowName := mtfShortTargetName
+
+int rawObjectiveBias = longScore >= shortScore + minimumScoreEdge ? 1 : shortScore >= longScore + minimumScoreEdge ? -1 : structureTrend
+int weeklyBias = thursdayBullishProfile ? 1 : thursdayBearishProfile ? -1 : mondayFridayLowMagnet ? -1 : 0
+
+var int activeObjectiveDir = 0
+var float activeObjectivePrice = na
+var string activeObjectiveName = "None"
+var bool objectiveTouched = false
+var int objectiveTouchedBar = na
+var string marketPhase = "Seeking liquidity"
+var int postObjectiveBias = 0
+int objectiveBias = postObjectiveBias != 0 ? postObjectiveBias : weeklyBias != 0 ? weeklyBias : rawObjectiveBias
+
+bool upperSweepReaction = false
+bool lowerSweepReaction = false
+bool upperAcceptanceReaction = false
+bool lowerAcceptanceReaction = false
+bool objectiveUnresolvedEvent = false
+
+if useObjectiveEngine and activeObjectiveDir == 0
+    if objectiveBias >= 0 and not na(nearestAbove)
+        activeObjectiveDir := 1
+        activeObjectivePrice := nearestAbove
+        activeObjectiveName := nearestAboveName
+        objectiveTouched := false
+        marketPhase := "Seeking upside liquidity"
+    else if objectiveBias < 0 and not na(nearestBelow)
+        activeObjectiveDir := -1
+        activeObjectivePrice := nearestBelow
+        activeObjectiveName := nearestBelowName
+        objectiveTouched := false
+        marketPhase := "Seeking downside liquidity"
+    else if not na(nearestAbove)
+        activeObjectiveDir := 1
+        activeObjectivePrice := nearestAbove
+        activeObjectiveName := nearestAboveName
+    else if not na(nearestBelow)
+        activeObjectiveDir := -1
+        activeObjectivePrice := nearestBelow
+        activeObjectiveName := nearestBelowName
+    if activeObjectiveDir != 0
+        postObjectiveBias := 0
+
+if useObjectiveEngine and activeObjectiveDir == 1 and not objectiveTouched and not na(activeObjectivePrice) and high >= activeObjectivePrice
+    objectiveTouched := true
+    objectiveTouchedBar := bar_index
+    marketPhase := "Upside objective touched — classifying"
+if useObjectiveEngine and activeObjectiveDir == -1 and not objectiveTouched and not na(activeObjectivePrice) and low <= activeObjectivePrice
+    objectiveTouched := true
+    objectiveTouchedBar := bar_index
+    marketPhase := "Downside objective touched — classifying"
+
+if useObjectiveEngine and objectiveTouched and not na(activeObjectivePrice)
+    int barsSinceTouch = bar_index - objectiveTouchedBar
+    if activeObjectiveDir == 1
+        if close < activeObjectivePrice
+            upperSweepReaction := true
+            postObjectiveBias := -1
+            marketPhase := "Buy-side swept — bearish reversal"
+            objectiveTouched := false
+            activeObjectiveDir := 0
+        else if close > activeObjectivePrice + atr * objectiveAcceptanceAtr
+            upperAcceptanceReaction := true
+            postObjectiveBias := 1
+            marketPhase := "Upside accepted — bullish continuation"
+            objectiveTouched := false
+            activeObjectiveDir := 0
+        else if barsSinceTouch > objectiveResolveBars
+            objectiveUnresolvedEvent := true
+            postObjectiveBias := 0
+            marketPhase := "Upside objective unresolved"
+            objectiveTouched := false
+            activeObjectiveDir := 0
+    else if activeObjectiveDir == -1
+        if close > activeObjectivePrice
+            lowerSweepReaction := true
+            postObjectiveBias := 1
+            marketPhase := "Sell-side swept — bullish reversal"
+            objectiveTouched := false
+            activeObjectiveDir := 0
+        else if close < activeObjectivePrice - atr * objectiveAcceptanceAtr
+            lowerAcceptanceReaction := true
+            postObjectiveBias := -1
+            marketPhase := "Downside accepted — bearish continuation"
+            objectiveTouched := false
+            activeObjectiveDir := 0
+        else if barsSinceTouch > objectiveResolveBars
+            objectiveUnresolvedEvent := true
+            postObjectiveBias := 0
+            marketPhase := "Downside objective unresolved"
+            objectiveTouched := false
+            activeObjectiveDir := 0
+
+bool recentUpperSweepReaction = f_recent(upperSweepReaction, objectiveFreshBars)
+bool recentLowerSweepReaction = f_recent(lowerSweepReaction, objectiveFreshBars)
+bool recentUpperAcceptance = f_recent(upperAcceptanceReaction, objectiveFreshBars)
+bool recentLowerAcceptance = f_recent(lowerAcceptanceReaction, objectiveFreshBars)
+
+bool bullishReversalContext = recentLowerSweepReaction or recentBullSweep
+bool bearishReversalContext = recentUpperSweepReaction or recentBearSweep
+bool bullishContinuationContext = recentUpperAcceptance or (bullishMAStack and structureTrend == 1)
+bool bearishContinuationContext = recentLowerAcceptance or (bearishMAStack and structureTrend == -1)
+
+var line objectiveLine = na
+var label objectiveLabel = na
+if barstate.islast
+    if useObjectiveEngine and activeObjectiveDir != 0 and not na(activeObjectivePrice)
+        if na(objectiveLine)
+            objectiveLine := line.new(bar_index - 20, activeObjectivePrice, bar_index + 10, activeObjectivePrice, xloc = xloc.bar_index, extend = extend.right, color = activeObjectiveDir == 1 ? color.lime : color.red, style = line.style_dashed, width = 2)
+        else
+            line.set_xy1(objectiveLine, bar_index - 20, activeObjectivePrice)
+            line.set_xy2(objectiveLine, bar_index + 10, activeObjectivePrice)
+            line.set_color(objectiveLine, activeObjectiveDir == 1 ? color.lime : color.red)
+        if showObjectiveLabel
+            if na(objectiveLabel)
+                objectiveLabel := label.new(bar_index, activeObjectivePrice, "", style = label.style_label_left, color = color.new(color.black, 15), textcolor = color.white, size = size.tiny)
+            label.set_xy(objectiveLabel, bar_index, activeObjectivePrice)
+            label.set_text(objectiveLabel, "OBJECTIVE: " + activeObjectiveName + "  " + f_price(activeObjectivePrice))
+    else
+        if not na(objectiveLine)
+            line.delete(objectiveLine)
+            objectiveLine := na
+        if not na(objectiveLabel)
+            label.delete(objectiveLabel)
+            objectiveLabel := na
+
+// ============================================================================
+// 12. M15 SNIPER DECISION ENGINE — WHOLE-INDICATOR CONFIRMATION
+// ============================================================================
+
+bool recentBullDisplacement = f_recent(bullishDisplacement, smcFreshBars)
+bool recentBearDisplacement = f_recent(bearishDisplacement, smcFreshBars)
+bool recentBullFVG = f_recent(bullFVG, smcFreshBars)
+bool recentBearFVG = f_recent(bearFVG, smcFreshBars)
+bool recentBullZone = f_recent(inBullOB or inBullFVG or insideBullishOTE, smcFreshBars)
+bool recentBearZone = f_recent(inBearOB or inBearFVG or insideBearishOTE, smcFreshBars)
+
+bool bullishPullbackLocation = (low <= ema20 + atr * 0.15 and close > ema20) or (low <= ema50 + atr * 0.15 and close > ema50) or inBullOB or inBullFVG or insideBullishOTE
+bool bearishPullbackLocation = (high >= ema20 - atr * 0.15 and close < ema20) or (high >= ema50 - atr * 0.15 and close < ema50) or inBearOB or inBearFVG or insideBearishOTE
+bool longReversalSMC = recentBullSweep and (recentBullCHoCH or recentBullBreak or recentBullInternalCHoCH or recentBullExternalCHoCH) and (recentBullDisplacement or recentBullFVG) and bullishDiscount and (not smcRequireZone or recentBullZone)
+bool shortReversalSMC = recentBearSweep and (recentBearCHoCH or recentBearBreak or recentBearInternalCHoCH or recentBearExternalCHoCH) and (recentBearDisplacement or recentBearFVG) and bearishPremium and (not smcRequireZone or recentBearZone)
+bool longContinuationSMC = bullishContinuationContext and (recentBullBreak or recentBullExternalBOS or recentBullInternalBOS) and (recentBullDisplacement or recentBullFVG) and (not smcRequireZone or bullishPullbackLocation)
+bool shortContinuationSMC = bearishContinuationContext and (recentBearBreak or recentBearExternalBOS or recentBearInternalBOS) and (recentBearDisplacement or recentBearFVG) and (not smcRequireZone or bearishPullbackLocation)
+bool longSMCConfirm = longReversalSMC or longContinuationSMC
+bool shortSMCConfirm = shortReversalSMC or shortContinuationSMC
+
+bool recentBullSMT = f_recent(bullishSMTEvent, smtFreshBars)
+bool recentBearSMT = f_recent(bearishSMTEvent, smtFreshBars)
+
+// ============================================================================
+// 12A. v7 SYMMETRIC REGIME-TRANSITION ENGINE
+// ============================================================================
+// This is deliberately an alternate gated path. It does NOT weaken normal continuation rules.
+// It only activates after a mature trend shows location + liquidity + structural deterioration.
+int upperExtremeTfCount = (h4PercentB >= nestedUpperExtreme ? 1 : 0) + (h2PercentB >= nestedUpperExtreme ? 1 : 0) + (h1PercentB >= nestedUpperExtreme ? 1 : 0) + (m15PercentB >= nestedUpperExtreme ? 1 : 0)
+int lowerExtremeTfCount = (h4PercentB <= nestedLowerExtreme ? 1 : 0) + (h2PercentB <= nestedLowerExtreme ? 1 : 0) + (h1PercentB <= nestedLowerExtreme ? 1 : 0) + (m15PercentB <= nestedLowerExtreme ? 1 : 0)
+bool recentFailedHigh = not na(lastHighClassBar) and bar_index - lastHighClassBar <= transitionSwingFreshBars and (lastHighClass == "LH" or lastHighClass == "EQH")
+bool recentFailedLow = not na(lastLowClassBar) and bar_index - lastLowClassBar <= transitionSwingFreshBars and (lastLowClass == "HL" or lastLowClass == "EQL")
+bool matureBullTrend = structuralBias > 0 and (bullSwingRun >= transitionMaturitySwings or (h4Trend > 0 and h2Trend >= 0 and upperExtremeTfCount >= 2))
+bool matureBearTrend = structuralBias < 0 and (bearSwingRun >= transitionMaturitySwings or (h4Trend < 0 and h2Trend <= 0 and lowerExtremeTfCount >= 2))
+
+bool bearTransitionLiquidity = recentBearSweep or recentUpperSweepReaction or bearBandReentry or f_recent(bearEqualHighSweep or bearProtectedHighSweep, liquidityFresh)
+bool bullTransitionLiquidity = recentBullSweep or recentLowerSweepReaction or bullBandReentry or f_recent(bullEqualLowSweep or bullProtectedLowSweep, liquidityFresh)
+bool bearTransitionStructure = recentBearInternalCHoCH or recentBearExternalCHoCH or recentBearBreak
+bool bullTransitionStructure = recentBullInternalCHoCH or recentBullExternalCHoCH or recentBullBreak
+bool bearTransitionEarlyShift = bearTransitionStructure or (bearishFastCross and (bearishDisplacement or m15UpperExtreme))
+bool bullTransitionEarlyShift = bullTransitionStructure or (bullishFastCross and (bullishDisplacement or m15LowerExtreme))
+bool upperTransitionLocation = nestedUpperExhaustionWatch or (upperExtremeTfCount >= 2 and m15PercentB >= 0.70) or (h1PercentB >= nestedUpperExtreme and m15UpperExtreme)
+bool lowerTransitionLocation = nestedLowerExhaustionWatch or (lowerExtremeTfCount >= 2 and m15PercentB <= 0.30) or (h1PercentB <= nestedLowerExtreme and m15LowerExtreme)
+
+int bearTransitionWatchScore = math.min(100,
+     (matureBullTrend ? 20 : 0) +
+     (upperTransitionLocation ? 15 : 0) +
+     (upperExtremeTfCount >= 3 ? 10 : upperExtremeTfCount >= 2 ? 5 : 0) +
+     (bearTransitionLiquidity ? 15 : 0) +
+     (recentFailedHigh ? 10 : 0) +
+     (recentBearSMT ? 10 : 0) +
+     (recentBearInternalCHoCH ? 10 : 0) +
+     (recentBearExternalCHoCH ? 15 : 0) +
+     (bearBandReentry ? 5 : 0) +
+     (bearishFastCross ? 5 : 0))
+int bullTransitionWatchScore = math.min(100,
+     (matureBearTrend ? 20 : 0) +
+     (lowerTransitionLocation ? 15 : 0) +
+     (lowerExtremeTfCount >= 3 ? 10 : lowerExtremeTfCount >= 2 ? 5 : 0) +
+     (bullTransitionLiquidity ? 15 : 0) +
+     (recentFailedLow ? 10 : 0) +
+     (recentBullSMT ? 10 : 0) +
+     (recentBullInternalCHoCH ? 10 : 0) +
+     (recentBullExternalCHoCH ? 15 : 0) +
+     (bullBandReentry ? 5 : 0) +
+     (bullishFastCross ? 5 : 0))
+
+bool bearTransitionCorePass = (shortScore >= transitionCoreFloor and shortScore + transitionCoreDeficitMax >= longScore) or recentBearExternalCHoCH
+bool bullTransitionCorePass = (longScore >= transitionCoreFloor and longScore + transitionCoreDeficitMax >= shortScore) or recentBullExternalCHoCH
+bool bearTransitionWatch = useRegimeTransition and matureBullTrend and upperTransitionLocation and bearTransitionEarlyShift and bearTransitionCorePass and bearTransitionWatchScore >= transitionArmScore and (not transitionRequireLiquidity or bearTransitionLiquidity)
+bool bullTransitionWatch = useRegimeTransition and matureBearTrend and lowerTransitionLocation and bullTransitionEarlyShift and bullTransitionCorePass and bullTransitionWatchScore >= transitionArmScore and (not transitionRequireLiquidity or bullTransitionLiquidity)
+bool bearTransitionConfirmed = bearTransitionWatch and bearTransitionStructure and bearTransitionWatchScore >= transitionMinimumScore
+bool bullTransitionConfirmed = bullTransitionWatch and bullTransitionStructure and bullTransitionWatchScore >= transitionMinimumScore
+
+// Strong transition evidence pauses fresh entries in the old direction, but does not rewrite the macro trend.
+bool blockFreshLongsForBearTransition = transitionSuppressOpposite and useRegimeTransition and structuralBias > 0 and matureBullTrend and bearTransitionWatchScore >= transitionBlockOppositeScore and upperTransitionLocation and bearTransitionEarlyShift
+bool blockFreshShortsForBullTransition = transitionSuppressOpposite and useRegimeTransition and structuralBias < 0 and matureBearTrend and bullTransitionWatchScore >= transitionBlockOppositeScore and lowerTransitionLocation and bullTransitionEarlyShift
+
+// Transition targets are intentionally scoped. Internal transition first aims at equilibrium;
+// an external CHoCH can widen the objective toward the next H1/H2/H4 station.
+float bearTransitionTarget = na
+string bearTransitionTargetName = "None"
+if recentBearExternalCHoCH
+    if not na(h1Lower) and h1Lower < close and (na(bearTransitionTarget) or h1Lower > bearTransitionTarget)
+        bearTransitionTarget := h1Lower
+        bearTransitionTargetName := "H1 BB Lower"
+    if not na(h2Basis) and h2Basis < close and (na(bearTransitionTarget) or h2Basis > bearTransitionTarget)
+        bearTransitionTarget := h2Basis
+        bearTransitionTargetName := "H2 BB Basis"
+    if not na(h4Basis) and h4Basis < close and (na(bearTransitionTarget) or h4Basis > bearTransitionTarget)
+        bearTransitionTarget := h4Basis
+        bearTransitionTargetName := "H4 BB Basis"
+else
+    if not na(bbBasis) and bbBasis < close and (na(bearTransitionTarget) or bbBasis > bearTransitionTarget)
+        bearTransitionTarget := bbBasis
+        bearTransitionTargetName := "M15 BB Basis"
+    if not na(h1Basis) and h1Basis < close and (na(bearTransitionTarget) or h1Basis > bearTransitionTarget)
+        bearTransitionTarget := h1Basis
+        bearTransitionTargetName := "H1 BB Basis"
+    if not na(h2Basis) and h2Basis < close and (na(bearTransitionTarget) or h2Basis > bearTransitionTarget)
+        bearTransitionTarget := h2Basis
+        bearTransitionTargetName := "H2 BB Basis"
+
+float bullTransitionTarget = na
+string bullTransitionTargetName = "None"
+if recentBullExternalCHoCH
+    if not na(h1Upper) and h1Upper > close and (na(bullTransitionTarget) or h1Upper < bullTransitionTarget)
+        bullTransitionTarget := h1Upper
+        bullTransitionTargetName := "H1 BB Upper"
+    if not na(h2Basis) and h2Basis > close and (na(bullTransitionTarget) or h2Basis < bullTransitionTarget)
+        bullTransitionTarget := h2Basis
+        bullTransitionTargetName := "H2 BB Basis"
+    if not na(h4Basis) and h4Basis > close and (na(bullTransitionTarget) or h4Basis < bullTransitionTarget)
+        bullTransitionTarget := h4Basis
+        bullTransitionTargetName := "H4 BB Basis"
+else
+    if not na(bbBasis) and bbBasis > close and (na(bullTransitionTarget) or bbBasis < bullTransitionTarget)
+        bullTransitionTarget := bbBasis
+        bullTransitionTargetName := "M15 BB Basis"
+    if not na(h1Basis) and h1Basis > close and (na(bullTransitionTarget) or h1Basis < bullTransitionTarget)
+        bullTransitionTarget := h1Basis
+        bullTransitionTargetName := "H1 BB Basis"
+    if not na(h2Basis) and h2Basis > close and (na(bullTransitionTarget) or h2Basis < bullTransitionTarget)
+        bullTransitionTarget := h2Basis
+        bullTransitionTargetName := "H2 BB Basis"
+
+bool bearTransitionTargetRoomValid = not na(bearTransitionTarget) and bearTransitionTarget < close and close - bearTransitionTarget >= atr * transitionMinimumRoomAtr
+bool bullTransitionTargetRoomValid = not na(bullTransitionTarget) and bullTransitionTarget > close and bullTransitionTarget - close >= atr * transitionMinimumRoomAtr
+string regimeTransitionState = bearTransitionConfirmed ? "BEAR TRANSITION" : bullTransitionConfirmed ? "BULL TRANSITION" : bearTransitionWatch ? "BULL EXHAUSTION / BEAR WATCH" : bullTransitionWatch ? "BEAR EXHAUSTION / BULL WATCH" : structuralBias > 0 ? "BULL CONTINUATION" : structuralBias < 0 ? "BEAR CONTINUATION" : "MIXED / RANGE"
+
+bool longNoChase = close <= bbUpper + atr * 0.10 and (not bullishFibReady or close <= bullishFib618 + atr * maxEntryDistanceAtr)
+bool shortNoChase = close >= bbLower - atr * 0.10 and (not bearishFibReady or close >= bearishFib618 - atr * maxEntryDistanceAtr)
+
+bool bullTransitionSMCConfirm = bullTransitionWatch and bullTransitionLiquidity and (recentBullInternalCHoCH or recentBullExternalCHoCH) and (recentBullDisplacement or recentBullFVG) and (bullishDiscount or bullBandReentry or recentBullZone or lowerTransitionLocation)
+bool bearTransitionSMCConfirm = bearTransitionWatch and bearTransitionLiquidity and (recentBearInternalCHoCH or recentBearExternalCHoCH) and (recentBearDisplacement or recentBearFVG) and (bearishPremium or bearBandReentry or recentBearZone or upperTransitionLocation)
+
+bool coreBaseLongSignalRaw = confirmationGate and not blockFreshLongsForBearTransition and longScore >= signalThreshold and longScore >= shortScore + minimumScoreEdge and
+     (recentBullCHoCH or recentBullBreak or recentBullInternalCHoCH or recentBullExternalCHoCH) and (close > bbBasis or bullishDisplacement)
+bool coreBaseShortSignalRaw = confirmationGate and not blockFreshShortsForBullTransition and shortScore >= signalThreshold and shortScore >= longScore + minimumScoreEdge and
+     (recentBearCHoCH or recentBearBreak or recentBearInternalCHoCH or recentBearExternalCHoCH) and (close < bbBasis or bearishDisplacement)
+bool bullTransitionBaseRaw = confirmationGate and bullTransitionConfirmed and bullTransitionTargetRoomValid and (recentBullInternalCHoCH or recentBullExternalCHoCH) and (close > ema9 or bullishDisplacement)
+bool bearTransitionBaseRaw = confirmationGate and bearTransitionConfirmed and bearTransitionTargetRoomValid and (recentBearInternalCHoCH or recentBearExternalCHoCH) and (close < ema9 or bearishDisplacement)
+bool baseLongSignalRaw = coreBaseLongSignalRaw or bullTransitionBaseRaw
+bool baseShortSignalRaw = coreBaseShortSignalRaw or bearTransitionBaseRaw
+
+bool smcLongPass = not useSMCConfirmation or longSMCConfirm or bullTransitionSMCConfirm
+bool smcShortPass = not useSMCConfirmation or shortSMCConfirm or bearTransitionSMCConfirm
+bool fibLongPass = not useFibonacciConfirm or bullishFibLocation
+bool fibShortPass = not useFibonacciConfirm or bearishFibLocation
+bool smtLongPass = not useSMTConfirmation or recentBullSMT
+bool smtShortPass = not useSMTConfirmation or recentBearSMT
+bool fastLongPass = not useFastMATrigger or bullishFastEntry
+bool fastShortPass = not useFastMATrigger or bearishFastEntry
+bool exceptionalLongCore = strongCoreBypass and longScore >= math.min(100, signalThreshold + strongCoreExtraPoints)
+bool exceptionalShortCore = strongCoreBypass and shortScore >= math.min(100, signalThreshold + strongCoreExtraPoints)
+bool bullishWeeklyAlignment = thursdayBullishProfile or bullLondonAsiaSweep or bullishWednesdayFailure
+bool bearishWeeklyAlignment = thursdayBearishProfile or bearLondonAsiaSweep or mondayAboveWednesday
+
+// Explicit structure quality: external map + protected level + internal transition + equal-liquidity event.
+int longAdvancedStructureScore = math.min(100,
+     (externalStructureTrend == 1 ? 20 : 0) +
+     (lastLowClass == "HL" ? 15 : lastLowClass == "EQL" ? 10 : 0) +
+     (lastHighClass == "HH" ? 10 : lastHighClass == "EQH" ? 5 : 0) +
+     (recentBullExternalCHoCH or recentBullExternalBOS ? 20 : 0) +
+     (recentBullInternalCHoCH or recentBullInternalBOS ? 15 : 0) +
+     (protectedLowIntact ? 10 : 0) +
+     (f_recent(bullEqualLowSweep or bullProtectedLowSweep, liquidityFresh) ? 10 : 0))
+int shortAdvancedStructureScore = math.min(100,
+     (externalStructureTrend == -1 ? 20 : 0) +
+     (lastHighClass == "LH" ? 15 : lastHighClass == "EQH" ? 10 : 0) +
+     (lastLowClass == "LL" ? 10 : lastLowClass == "EQL" ? 5 : 0) +
+     (recentBearExternalCHoCH or recentBearExternalBOS ? 20 : 0) +
+     (recentBearInternalCHoCH or recentBearInternalBOS ? 15 : 0) +
+     (protectedHighIntact ? 10 : 0) +
+     (f_recent(bearEqualHighSweep or bearProtectedHighSweep, liquidityFresh) ? 10 : 0))
+bool advancedLongStructurePass = not useAdvancedStructure or longAdvancedStructureScore >= advancedStructureMinimumScore or (recentBullInternalCHoCH and recentBullSweep and nestedLowerExhaustionWatch) or (bullTransitionWatch and bullTransitionStructure and bullTransitionLiquidity)
+bool advancedShortStructurePass = not useAdvancedStructure or shortAdvancedStructureScore >= advancedStructureMinimumScore or (recentBearInternalCHoCH and recentBearSweep and nestedUpperExhaustionWatch) or (bearTransitionWatch and bearTransitionStructure and bearTransitionLiquidity)
+
+int effectiveLongDirectionalScore = bullTransitionWatch ? math.max(longMtfScore, bullTransitionWatchScore) : longMtfScore
+int effectiveShortDirectionalScore = bearTransitionWatch ? math.max(shortMtfScore, bearTransitionWatchScore) : shortMtfScore
+int longContextScore = math.min(100, int(math.round(effectiveLongDirectionalScore * 0.45 + longNestedBandScore * 0.30 + longAdvancedStructureScore * 0.25)))
+int shortContextScore = math.min(100, int(math.round(effectiveShortDirectionalScore * 0.45 + shortNestedBandScore * 0.30 + shortAdvancedStructureScore * 0.25)))
+
+int longQualityScore = math.min(100, int(math.round(longScore * 0.50 + longContextScore * 0.30 + longLtfScore * 0.20)) + (bullishWeeklyAlignment ? weeklyProfileWeight : 0) + (recentBullSMT ? 3 : 0) + (bullishFibLocation ? 3 : 0))
+int shortQualityScore = math.min(100, int(math.round(shortScore * 0.50 + shortContextScore * 0.30 + shortLtfScore * 0.20)) + (bearishWeeklyAlignment ? weeklyProfileWeight : 0) + (recentBearSMT ? 3 : 0) + (bearishFibLocation ? 3 : 0))
+
+bool longMarketCycleContext = bullishReversalContext or bullishContinuationContext or bullTransitionWatch
+bool shortMarketCycleContext = bearishReversalContext or bearishContinuationContext or bearTransitionWatch
+bool mtfLongContext = mtfContinuationLongContext or mtfReversalLongContext
+bool mtfShortContext = mtfContinuationShortContext or mtfReversalShortContext
+bool mtfLongPass = not useMTFCascade or (mtfLongContext and longMtfScore >= mtfMinimumScore and longTargetRoomValid and nestedLongPermission) or (bullTransitionWatch and bullTransitionTargetRoomValid and nestedLongPermission)
+bool mtfShortPass = not useMTFCascade or (mtfShortContext and shortMtfScore >= mtfMinimumScore and shortTargetRoomValid and nestedShortPermission) or (bearTransitionWatch and bearTransitionTargetRoomValid and nestedShortPermission)
+bool newsBlackoutActive = useManualNewsBlackout and time >= newsBlackoutStart and time <= newsBlackoutEnd
+
+// M15 POI classification. Continuations want an HTF-aligned pullback; reversals want completed/swept liquidity at discount/premium.
+bool bullTransitionPoi = bullTransitionWatch and lowerTransitionLocation and (bullTransitionLiquidity or recentBullSMT) and (bullishDiscount or bullBandReentry or recentBullZone or m15LowerExtreme)
+bool bearTransitionPoi = bearTransitionWatch and upperTransitionLocation and (bearTransitionLiquidity or recentBearSMT) and (bearishPremium or bearBandReentry or recentBearZone or m15UpperExtreme)
+bool longReversalPoi = (bullishReversalContext or mtfReversalLongContext or tacticalPullbackLongWatch or bullTransitionWatch) and (bullishDiscount or bullBandReentry or recentBullZone or bullishFibLocation or bullTransitionPoi)
+bool shortReversalPoi = (bearishReversalContext or mtfReversalShortContext or tacticalPullbackShortWatch or bearTransitionWatch) and (bearishPremium or bearBandReentry or recentBearZone or bearishFibLocation or bearTransitionPoi)
+bool longContinuationPoi = mtfContinuationLongContext and not blockFreshLongsForBearTransition and (bullishPullbackLocation or bullBandReentry or (h1BullPoi and close <= ema20 + atr * 0.35))
+bool shortContinuationPoi = mtfContinuationShortContext and not blockFreshShortsForBullTransition and (bearishPullbackLocation or bearBandReentry or (h1BearPoi and close >= ema20 - atr * 0.35))
+bool longM15Poi = longReversalPoi or longContinuationPoi or bullTransitionPoi
+bool shortM15Poi = shortReversalPoi or shortContinuationPoi or bearTransitionPoi
+
+// Entry quality on the M15 trigger candle. The location metric avoids accepting weak closes after a supposed reversal.
+float bullCloseLocation = (close - low) / math.max(high - low, syminfo.mintick)
+float bearCloseLocation = (high - close) / math.max(high - low, syminfo.mintick)
+bool m15BullCloseQuality = not requireM15CloseQuality or (close > open and bullCloseLocation >= m15CloseLocationMin)
+bool m15BearCloseQuality = not requireM15CloseQuality or (close < open and bearCloseLocation >= m15CloseLocationMin)
+bool longNotExtended = math.abs(close - ema9) <= atr * sniperMaxEmaExtensionAtr
+bool shortNotExtended = math.abs(close - ema9) <= atr * sniperMaxEmaExtensionAtr
+
+// Structural stop and projected target. The stop uses the nearest valid structural reference below/above price plus an ATR buffer.
+float longStopReference = na
+longStopReference := f_pick_below(close, lastPivotLow, longStopReference)
+longStopReference := f_pick_below(close, protectedLow, longStopReference)
+longStopReference := f_pick_below(close, bullishFibLow, longStopReference)
+longStopReference := f_pick_below(close, asiaLow, longStopReference)
+float shortStopReference = na
+shortStopReference := f_pick_above(close, lastPivotHigh, shortStopReference)
+shortStopReference := f_pick_above(close, protectedHigh, shortStopReference)
+shortStopReference := f_pick_above(close, bearishFibHigh, shortStopReference)
+shortStopReference := f_pick_above(close, asiaHigh, shortStopReference)
+float longSniperStop = na(longStopReference) ? close - atr : longStopReference - atr * sniperStopBufferAtr
+float shortSniperStop = na(shortStopReference) ? close + atr : shortStopReference + atr * sniperStopBufferAtr
+float longSniperTarget = bullTransitionWatch and not na(bullTransitionTarget) and bullTransitionTarget > close ? bullTransitionTarget : useNestedBandIntelligence and not na(nestedLongTarget) and nestedLongTarget > close ? nestedLongTarget : useMTFCascade and not na(mtfLongTarget) and mtfLongTarget > close ? mtfLongTarget : nearestAbove
+float shortSniperTarget = bearTransitionWatch and not na(bearTransitionTarget) and bearTransitionTarget < close ? bearTransitionTarget : useNestedBandIntelligence and not na(nestedShortTarget) and nestedShortTarget < close ? nestedShortTarget : useMTFCascade and not na(mtfShortTarget) and mtfShortTarget < close ? mtfShortTarget : nearestBelow
+float longRiskDistance = math.max(close - longSniperStop, syminfo.mintick)
+float shortRiskDistance = math.max(shortSniperStop - close, syminfo.mintick)
+float longRewardDistance = not na(longSniperTarget) and longSniperTarget > close ? longSniperTarget - close : 0.0
+float shortRewardDistance = not na(shortSniperTarget) and shortSniperTarget < close ? close - shortSniperTarget : 0.0
+float longProjectedRR = longRewardDistance / longRiskDistance
+float shortProjectedRR = shortRewardDistance / shortRiskDistance
+float longRequiredRR = bullTransitionWatch ? transitionMinimumRR : sniperMinimumRR
+float shortRequiredRR = bearTransitionWatch ? transitionMinimumRR : sniperMinimumRR
+bool longRRPass = not useSniperEngine or longProjectedRR >= longRequiredRR
+bool shortRRPass = not useSniperEngine or shortProjectedRR >= shortRequiredRR
+
+// v8 SETUP QUALITY — location/context quality is separated from execution timing.
+// This does not replace the existing sniper/core gates; it explains and ranks the armed location without delaying it.
+int longSetupQuality = math.min(100, int(math.round(longContextScore * 0.34 + longAdvancedStructureScore * 0.18 + longNestedBandScore * 0.16 + effectiveLongDirectionalScore * 0.12)) +
+     (longM15Poi ? 8 : 0) + (longRRPass ? 5 : 0) + (bullishFibLocation ? 3 : 0) + (recentBullSMT ? 2 : 0) + (not na(nearestBelow) ? 2 : 0))
+int shortSetupQuality = math.min(100, int(math.round(shortContextScore * 0.34 + shortAdvancedStructureScore * 0.18 + shortNestedBandScore * 0.16 + effectiveShortDirectionalScore * 0.12)) +
+     (shortM15Poi ? 8 : 0) + (shortRRPass ? 5 : 0) + (bearishFibLocation ? 3 : 0) + (recentBearSMT ? 2 : 0) + (not na(nearestAbove) ? 2 : 0))
+
+// ============================================================================
+// v9 ADAPTIVE LEARNING MEMORY — evaluates ARMED setup location, not a late moved entry
+// Feature bits: 1 liquidity, 2 SMC, 4 Fib, 8 SMT, 16 structure, 32 nested BB,
+//               64 HTF, 128 fast MA, 256 RVOL, 512 weekly/session profile.
+// ============================================================================
+var array<int> learnLongFeatureWins = array.new_int(10, 0)
+var array<int> learnLongFeatureTrials = array.new_int(10, 0)
+var array<int> learnShortFeatureWins = array.new_int(10, 0)
+var array<int> learnShortFeatureTrials = array.new_int(10, 0)
+var array<int> learnLongSignatureWins = array.new_int(1024, 0)
+var array<int> learnLongSignatureTrials = array.new_int(1024, 0)
+var array<int> learnShortSignatureWins = array.new_int(1024, 0)
+var array<int> learnShortSignatureTrials = array.new_int(1024, 0)
+var array<int> learnLongRegimeWins = array.new_int(4, 0)
+var array<int> learnLongRegimeTrials = array.new_int(4, 0)
+var array<int> learnShortRegimeWins = array.new_int(4, 0)
+var array<int> learnShortRegimeTrials = array.new_int(4, 0)
+var array<int> learnLongSessionWins = array.new_int(4, 0)
+var array<int> learnLongSessionTrials = array.new_int(4, 0)
+var array<int> learnShortSessionWins = array.new_int(4, 0)
+var array<int> learnShortSessionTrials = array.new_int(4, 0)
+
+var int learnLongWins = 0
+var int learnLongLosses = 0
+var int learnLongTimeouts = 0
+var int learnShortWins = 0
+var int learnShortLosses = 0
+var int learnShortTimeouts = 0
+
+var bool learnLongActive = false
+var float learnLongEntry = na
+var float learnLongStop = na
+var float learnLongTarget = na
+var int learnLongStartBar = na
+var int learnLongMask = 0
+var int learnLongRegime = 1
+var int learnLongSession = 0
+var bool learnShortActive = false
+var float learnShortEntry = na
+var float learnShortStop = na
+var float learnShortTarget = na
+var int learnShortStartBar = na
+var int learnShortMask = 0
+var int learnShortRegime = 1
+var int learnShortSession = 0
+
+bool learnedLongWinEvent = false
+bool learnedLongLossEvent = false
+bool learnedShortWinEvent = false
+bool learnedShortLossEvent = false
+
+// Resolve previously armed historical setups. If stop and target print on the same candle, count it conservatively as a loss.
+if useAdaptiveLearning and learnLongActive and bar_index > nz(learnLongStartBar, bar_index)
+    bool stopHit = low <= learnLongStop
+    bool targetHit = high >= learnLongTarget
+    bool timedOut = bar_index - learnLongStartBar > learningMaximumBars
+    if stopHit or targetHit
+        bool won = targetHit and not stopHit
+        int priorRegimeTrials = array.get(learnLongRegimeTrials, learnLongRegime)
+        int priorSessionTrials = array.get(learnLongSessionTrials, learnLongSession)
+        array.set(learnLongRegimeTrials, learnLongRegime, priorRegimeTrials + 1)
+        array.set(learnLongSessionTrials, learnLongSession, priorSessionTrials + 1)
+        if won
+            learnLongWins += 1
+            array.set(learnLongRegimeWins, learnLongRegime, array.get(learnLongRegimeWins, learnLongRegime) + 1)
+            array.set(learnLongSessionWins, learnLongSession, array.get(learnLongSessionWins, learnLongSession) + 1)
+            learnedLongWinEvent := true
+        else
+            learnLongLosses += 1
+            learnedLongLossEvent := true
+        int _learnUpdate = f_learning_update(learnLongMask, won, learnLongFeatureWins, learnLongFeatureTrials, learnLongSignatureWins, learnLongSignatureTrials)
+        learnLongActive := false
+    else if timedOut
+        learnLongTimeouts += 1
+        learnLongActive := false
+
+if useAdaptiveLearning and learnShortActive and bar_index > nz(learnShortStartBar, bar_index)
+    bool stopHit = high >= learnShortStop
+    bool targetHit = low <= learnShortTarget
+    bool timedOut = bar_index - learnShortStartBar > learningMaximumBars
+    if stopHit or targetHit
+        bool won = targetHit and not stopHit
+        int priorRegimeTrials = array.get(learnShortRegimeTrials, learnShortRegime)
+        int priorSessionTrials = array.get(learnShortSessionTrials, learnShortSession)
+        array.set(learnShortRegimeTrials, learnShortRegime, priorRegimeTrials + 1)
+        array.set(learnShortSessionTrials, learnShortSession, priorSessionTrials + 1)
+        if won
+            learnShortWins += 1
+            array.set(learnShortRegimeWins, learnShortRegime, array.get(learnShortRegimeWins, learnShortRegime) + 1)
+            array.set(learnShortSessionWins, learnShortSession, array.get(learnShortSessionWins, learnShortSession) + 1)
+            learnedShortWinEvent := true
+        else
+            learnShortLosses += 1
+            learnedShortLossEvent := true
+        int _learnUpdate = f_learning_update(learnShortMask, won, learnShortFeatureWins, learnShortFeatureTrials, learnShortSignatureWins, learnShortSignatureTrials)
+        learnShortActive := false
+    else if timedOut
+        learnShortTimeouts += 1
+        learnShortActive := false
+
+int currentSessionBucket = inAsia ? 1 : inLondon ? 2 : inNewYork ? 3 : 0
+int currentLongRegimeBucket = bullTransitionWatch ? 3 : bullishReversalContext or tacticalPullbackLongWatch ? 2 : 1
+int currentShortRegimeBucket = bearTransitionWatch ? 3 : bearishReversalContext or tacticalPullbackShortWatch ? 2 : 1
+int currentLongLearnMask = f_feature_mask(recentBullSweep or recentLowerSweepReaction, longSMCConfirm or bullTransitionSMCConfirm, bullishFibLocation, recentBullSMT, advancedLongStructurePass, longNestedBandScore >= nestedBandMinimumScore, longMtfScore >= mtfMinimumScore or bullTransitionWatch, fastLongPass, highRelativeVolume, bullishWeeklyAlignment)
+int currentShortLearnMask = f_feature_mask(recentBearSweep or recentUpperSweepReaction, shortSMCConfirm or bearTransitionSMCConfirm, bearishFibLocation, recentBearSMT, advancedShortStructurePass, shortNestedBandScore >= nestedBandMinimumScore, shortMtfScore >= mtfMinimumScore or bearTransitionWatch, fastShortPass, highRelativeVolume, bearishWeeklyAlignment)
+
+int longLearnTrials = learnLongWins + learnLongLosses
+int shortLearnTrials = learnShortWins + learnShortLosses
+bool longLearningReady = useAdaptiveLearning and longLearnTrials >= learningMinimumSamples
+bool shortLearningReady = useAdaptiveLearning and shortLearnTrials >= learningMinimumSamples
+
+float longSideRate = f_learn_rate(learnLongWins, longLearnTrials)
+float shortSideRate = f_learn_rate(learnShortWins, shortLearnTrials)
+float longRegimeRate = f_learn_rate(array.get(learnLongRegimeWins, currentLongRegimeBucket), array.get(learnLongRegimeTrials, currentLongRegimeBucket))
+float shortRegimeRate = f_learn_rate(array.get(learnShortRegimeWins, currentShortRegimeBucket), array.get(learnShortRegimeTrials, currentShortRegimeBucket))
+float longSessionRate = f_learn_rate(array.get(learnLongSessionWins, currentSessionBucket), array.get(learnLongSessionTrials, currentSessionBucket))
+float shortSessionRate = f_learn_rate(array.get(learnShortSessionWins, currentSessionBucket), array.get(learnShortSessionTrials, currentSessionBucket))
+float longFeatureRate = f_learning_feature_rate(currentLongLearnMask, learnLongFeatureWins, learnLongFeatureTrials)
+float shortFeatureRate = f_learning_feature_rate(currentShortLearnMask, learnShortFeatureWins, learnShortFeatureTrials)
+float longSignatureRate = f_learn_rate(array.get(learnLongSignatureWins, currentLongLearnMask), array.get(learnLongSignatureTrials, currentLongLearnMask))
+float shortSignatureRate = f_learn_rate(array.get(learnShortSignatureWins, currentShortLearnMask), array.get(learnShortSignatureTrials, currentShortLearnMask))
+float longLearnedRate = longSideRate * 0.20 + longRegimeRate * 0.25 + longSessionRate * 0.10 + longFeatureRate * 0.25 + longSignatureRate * 0.20
+float shortLearnedRate = shortSideRate * 0.20 + shortRegimeRate * 0.25 + shortSessionRate * 0.10 + shortFeatureRate * 0.25 + shortSignatureRate * 0.20
+int longLearnedConfidence = int(math.round(longLearnedRate * 100.0))
+int shortLearnedConfidence = int(math.round(shortLearnedRate * 100.0))
+int longLearningAdjustment = longLearningReady and learningMode == "Bounded" ? int(math.round((longLearnedRate - 0.50) * 2.0 * learningMaxScoreAdjustment)) : 0
+int shortLearningAdjustment = shortLearningReady and learningMode == "Bounded" ? int(math.round((shortLearnedRate - 0.50) * 2.0 * learningMaxScoreAdjustment)) : 0
+
+// Arm the setup before accepting lower-timeframe confirmations. Normal continuation and regime-transition arms are separate paths.
+bool normalLongArmRaw = sniperTimeframePass and confirmationGate and not newsBlackoutActive and not blockFreshLongsForBearTransition and longScore >= sniperArmCoreThreshold and longScore >= shortScore and mtfLongPass and longM15Poi and longNoChase
+bool normalShortArmRaw = sniperTimeframePass and confirmationGate and not newsBlackoutActive and not blockFreshShortsForBullTransition and shortScore >= sniperArmCoreThreshold and shortScore >= longScore and mtfShortPass and shortM15Poi and shortNoChase
+bool transitionLongArmRaw = sniperTimeframePass and confirmationGate and not newsBlackoutActive and bullTransitionWatch and bullTransitionCorePass and bullTransitionTargetRoomValid and longM15Poi and longNoChase
+bool transitionShortArmRaw = sniperTimeframePass and confirmationGate and not newsBlackoutActive and bearTransitionWatch and bearTransitionCorePass and bearTransitionTargetRoomValid and shortM15Poi and shortNoChase
+bool longArmRaw = normalLongArmRaw or transitionLongArmRaw
+bool shortArmRaw = normalShortArmRaw or transitionShortArmRaw
+bool freshLongNormalArmEvent = normalLongArmRaw and (not normalLongArmRaw[1] or bullLiquiditySweep or lowerSweepReaction or bullishFastCross or bullBandReentry or bullBreak or internalBullCHoCH or bullExternalCHoCH)
+bool freshShortNormalArmEvent = normalShortArmRaw and (not normalShortArmRaw[1] or bearLiquiditySweep or upperSweepReaction or bearishFastCross or bearBandReentry or bearBreak or internalBearCHoCH or bearExternalCHoCH)
+bool freshLongTransitionArmEvent = transitionLongArmRaw and (not transitionLongArmRaw[1] or bullTransitionLiquidity or bullishFastCross or internalBullCHoCH or bullExternalCHoCH)
+bool freshShortTransitionArmEvent = transitionShortArmRaw and (not transitionShortArmRaw[1] or bearTransitionLiquidity or bearishFastCross or internalBearCHoCH or bearExternalCHoCH)
+bool freshLongArmEvent = freshLongTransitionArmEvent or freshLongNormalArmEvent
+bool freshShortArmEvent = freshShortTransitionArmEvent or freshShortNormalArmEvent
+
+var bool longSniperArmed = false
+var bool shortSniperArmed = false
+var int longSniperArmTime = 0
+var int shortSniperArmTime = 0
+var int longSniperArmBar = na
+var int shortSniperArmBar = na
+// 0 = none, 1 = normal continuation/reversal, 2 = regime transition.
+var int longSniperArmMode = 0
+var int shortSniperArmMode = 0
+
+if useSniperEngine
+    if freshLongTransitionArmEvent
+        longSniperArmed := true
+        shortSniperArmed := false
+        longSniperArmMode := 2
+        shortSniperArmMode := 0
+        longSniperArmTime := time
+        longSniperArmBar := bar_index
+    else if freshLongNormalArmEvent and not longSniperArmed
+        longSniperArmed := true
+        shortSniperArmed := false
+        longSniperArmMode := 1
+        shortSniperArmMode := 0
+        longSniperArmTime := time
+        longSniperArmBar := bar_index
+    if freshShortTransitionArmEvent
+        shortSniperArmed := true
+        longSniperArmed := false
+        shortSniperArmMode := 2
+        longSniperArmMode := 0
+        shortSniperArmTime := time
+        shortSniperArmBar := bar_index
+    else if freshShortNormalArmEvent and not shortSniperArmed
+        shortSniperArmed := true
+        longSniperArmed := false
+        shortSniperArmMode := 1
+        longSniperArmMode := 0
+        shortSniperArmTime := time
+        shortSniperArmBar := bar_index
+    if longSniperArmed and (bar_index - nz(longSniperArmBar, bar_index) > sniperSetupExpiryBars or (longSniperArmMode != 2 and shortScore >= longScore + minimumScoreEdge) or newsBlackoutActive)
+        longSniperArmed := false
+        longSniperArmMode := 0
+    if shortSniperArmed and (bar_index - nz(shortSniperArmBar, bar_index) > sniperSetupExpiryBars or (shortSniperArmMode != 2 and longScore >= shortScore + minimumScoreEdge) or newsBlackoutActive)
+        shortSniperArmed := false
+        shortSniperArmMode := 0
+else
+    longSniperArmed := longArmRaw
+    shortSniperArmed := shortArmRaw
+    longSniperArmMode := transitionLongArmRaw ? 2 : normalLongArmRaw ? 1 : 0
+    shortSniperArmMode := transitionShortArmRaw ? 2 : normalShortArmRaw ? 1 : 0
+    longSniperArmTime := time
+    shortSniperArmTime := time
+
+// v8 SETUP MEMORY — preserve the original M15 armed candle/zone even while later confirmations arrive.
+var float rememberedLongArmLow = na
+var float rememberedLongArmHigh = na
+var float rememberedLongArmClose = na
+var float rememberedLongArmStop = na
+var float rememberedLongArmTarget = na
+var int rememberedLongSetupQuality = 0
+var int rememberedLongArmMode = 0
+var float rememberedShortArmLow = na
+var float rememberedShortArmHigh = na
+var float rememberedShortArmClose = na
+var float rememberedShortArmStop = na
+var float rememberedShortArmTarget = na
+var int rememberedShortSetupQuality = 0
+var int rememberedShortArmMode = 0
+
+if freshLongArmEvent
+    rememberedLongArmLow := low
+    rememberedLongArmHigh := high
+    rememberedLongArmClose := close
+    rememberedLongArmStop := longSniperStop
+    rememberedLongArmTarget := longSniperTarget
+    rememberedLongSetupQuality := longSetupQuality
+    rememberedLongArmMode := transitionLongArmRaw ? 2 : 1
+if freshShortArmEvent
+    rememberedShortArmLow := low
+    rememberedShortArmHigh := high
+    rememberedShortArmClose := close
+    rememberedShortArmStop := shortSniperStop
+    rememberedShortArmTarget := shortSniperTarget
+    rememberedShortSetupQuality := shortSetupQuality
+    rememberedShortArmMode := transitionShortArmRaw ? 2 : 1
+
+// Start one non-overlapping learning sample per side from the ORIGINAL armed candle.
+// The sample outcome starts on the next candle to avoid using price action that occurred before the arm was known.
+if useAdaptiveLearning and freshLongArmEvent and not learnLongActive and not na(rememberedLongArmStop)
+    float learnRisk = rememberedLongArmClose - rememberedLongArmStop
+    float candidateTarget = learningOutcomeMode == "R Multiple" ? rememberedLongArmClose + learnRisk * learningSuccessR : rememberedLongArmTarget
+    if learnRisk > syminfo.mintick and not na(candidateTarget) and candidateTarget > rememberedLongArmClose
+        learnLongActive := true
+        learnLongEntry := rememberedLongArmClose
+        learnLongStop := rememberedLongArmStop
+        learnLongTarget := candidateTarget
+        learnLongStartBar := bar_index
+        learnLongMask := currentLongLearnMask
+        learnLongRegime := rememberedLongArmMode == 2 ? 3 : bullishReversalContext or tacticalPullbackLongWatch ? 2 : 1
+        learnLongSession := currentSessionBucket
+
+if useAdaptiveLearning and freshShortArmEvent and not learnShortActive and not na(rememberedShortArmStop)
+    float learnRisk = rememberedShortArmStop - rememberedShortArmClose
+    float candidateTarget = learningOutcomeMode == "R Multiple" ? rememberedShortArmClose - learnRisk * learningSuccessR : rememberedShortArmTarget
+    if learnRisk > syminfo.mintick and not na(candidateTarget) and candidateTarget < rememberedShortArmClose
+        learnShortActive := true
+        learnShortEntry := rememberedShortArmClose
+        learnShortStop := rememberedShortArmStop
+        learnShortTarget := candidateTarget
+        learnShortStartBar := bar_index
+        learnShortMask := currentShortLearnMask
+        learnShortRegime := rememberedShortArmMode == 2 ? 3 : bearishReversalContext or tacticalPullbackShortWatch ? 2 : 1
+        learnShortSession := currentSessionBucket
+
+int sniperLtfGraceMs = sniperLtfGraceMin * 60 * 1000
+bool m1BullAfterArm = longSniperArmed and m1BullInitTime > 0 and m1BullInitTime + sniperLtfGraceMs >= longSniperArmTime
+bool m3BullAfterArm = longSniperArmed and m3BullValidationTime > 0 and m3BullValidationTime + sniperLtfGraceMs >= longSniperArmTime
+bool m5BullAfterArm = longSniperArmed and m5BullValidationTime > 0 and m5BullValidationTime + sniperLtfGraceMs >= longSniperArmTime
+bool bullRetestAfterArm = longSniperArmed and latestBullRetestTime > 0 and latestBullRetestTime + sniperLtfGraceMs >= longSniperArmTime
+bool m1BearAfterArm = shortSniperArmed and m1BearInitTime > 0 and m1BearInitTime + sniperLtfGraceMs >= shortSniperArmTime
+bool m3BearAfterArm = shortSniperArmed and m3BearValidationTime > 0 and m3BearValidationTime + sniperLtfGraceMs >= shortSniperArmTime
+bool m5BearAfterArm = shortSniperArmed and m5BearValidationTime > 0 and m5BearValidationTime + sniperLtfGraceMs >= shortSniperArmTime
+bool bearRetestAfterArm = shortSniperArmed and latestBearRetestTime > 0 and latestBearRetestTime + sniperLtfGraceMs >= shortSniperArmTime
+
+bool sniperBalancedLtfLong = not useLTFPrecision or (balancedLtfLong and m3BullAfterArm and m5BullAfterArm and (not requireLtfRetest or bullRetestAfterArm))
+bool sniperBalancedLtfShort = not useLTFPrecision or (balancedLtfShort and m3BearAfterArm and m5BearAfterArm and (not requireLtfRetest or bearRetestAfterArm))
+bool sniperPrecisionLtfLong = not useLTFPrecision or (precisionLtfLong and m1BullAfterArm and m3BullAfterArm and m5BullAfterArm and (not requireLtfRetest or bullRetestAfterArm))
+bool sniperPrecisionLtfShort = not useLTFPrecision or (precisionLtfShort and m1BearAfterArm and m3BearAfterArm and m5BearAfterArm and (not requireLtfRetest or bearRetestAfterArm))
+
+// v8 LIQUIDITY + TRIGGER SEQUENCE. A sweep is tied to the currently armed M15 setup, not accepted as stale evidence.
+int latestBullLiquidityBar = ta.valuewhen(bullLiquiditySweep or lowerSweepReaction, bar_index, 0)
+int latestBearLiquidityBar = ta.valuewhen(bearLiquiditySweep or upperSweepReaction, bar_index, 0)
+bool bullLiquidityAfterArm = longSniperArmed and not na(longSniperArmBar) and not na(latestBullLiquidityBar) and latestBullLiquidityBar >= longSniperArmBar
+bool bearLiquidityAfterArm = shortSniperArmed and not na(shortSniperArmBar) and not na(latestBearLiquidityBar) and latestBearLiquidityBar >= shortSniperArmBar
+int longTriggerQuality = math.min(100,
+     (bullLiquidityAfterArm ? 20 : 0) +
+     (m1BullAfterArm ? 10 : 0) +
+     (m3BullAfterArm ? 20 : 0) +
+     (m5BullAfterArm ? 25 : 0) +
+     (recentBullInternalCHoCH or recentBullExternalCHoCH ? 10 : 0) +
+     (bullRetestAfterArm ? 10 : 0) +
+     (fastLongPass ? 5 : 0))
+int shortTriggerQuality = math.min(100,
+     (bearLiquidityAfterArm ? 20 : 0) +
+     (m1BearAfterArm ? 10 : 0) +
+     (m3BearAfterArm ? 20 : 0) +
+     (m5BearAfterArm ? 25 : 0) +
+     (recentBearInternalCHoCH or recentBearExternalCHoCH ? 10 : 0) +
+     (bearRetestAfterArm ? 10 : 0) +
+     (fastShortPass ? 5 : 0))
+
+var int rememberedLongTriggerQuality = 0
+var int rememberedShortTriggerQuality = 0
+if longSniperArmed
+    rememberedLongTriggerQuality := longTriggerQuality
+if shortSniperArmed
+    rememberedShortTriggerQuality := shortTriggerQuality
+
+// Whole-engine execution grade. Core, HTF, LTF and immediate execution conditions all participate.
+int longExecutionScore = math.min(100, (smcLongPass ? 18 : 0) + (fibLongPass ? 12 : 0) + (smtLongPass ? 10 : 0) + (fastLongPass ? 15 : 0) + (longRRPass ? 15 : 0) + (longM15Poi ? 10 : 0) + (m15BullCloseQuality ? 5 : 0) + (highRelativeVolume ? 5 : 0) + (bullishWeeklyAlignment ? 5 : 0) + (advancedLongStructurePass ? 5 : 0) + (bullTransitionConfirmed ? 8 : 0))
+int shortExecutionScore = math.min(100, (smcShortPass ? 18 : 0) + (fibShortPass ? 12 : 0) + (smtShortPass ? 10 : 0) + (fastShortPass ? 15 : 0) + (shortRRPass ? 15 : 0) + (shortM15Poi ? 10 : 0) + (m15BearCloseQuality ? 5 : 0) + (highRelativeVolume ? 5 : 0) + (bearishWeeklyAlignment ? 5 : 0) + (advancedShortStructurePass ? 5 : 0) + (bearTransitionConfirmed ? 8 : 0))
+int normalLongSniperScore = math.min(100, int(math.round(longScore * 0.28 + longContextScore * 0.27 + longLtfScore * 0.25 + longExecutionScore * 0.20)))
+int normalShortSniperScore = math.min(100, int(math.round(shortScore * 0.28 + shortContextScore * 0.27 + shortLtfScore * 0.25 + shortExecutionScore * 0.20)))
+// During a regime flip the old trend's core score is expected to lag. Transition scoring therefore
+// gives more weight to exhaustion, structure, LTF confirmation and execution while still retaining core participation.
+int bullTransitionSniperScore = math.min(100, int(math.round(bullTransitionWatchScore * 0.30 + longScore * 0.15 + longContextScore * 0.20 + longLtfScore * 0.20 + longExecutionScore * 0.15)))
+int bearTransitionSniperScore = math.min(100, int(math.round(bearTransitionWatchScore * 0.30 + shortScore * 0.15 + shortContextScore * 0.20 + shortLtfScore * 0.20 + shortExecutionScore * 0.15)))
+int longSniperScore = longSniperArmMode == 2 ? bullTransitionSniperScore : normalLongSniperScore
+int shortSniperScore = shortSniperArmMode == 2 ? bearTransitionSniperScore : normalShortSniperScore
+int adaptiveLongSniperScore = f_bound_score(longSniperScore + longLearningAdjustment)
+int adaptiveShortSniperScore = f_bound_score(shortSniperScore + shortLearningAdjustment)
+int longRequiredSniperScore = longSniperArmMode == 2 ? transitionMinimumScore : sniperMinimumScore
+int shortRequiredSniperScore = shortSniperArmMode == 2 ? transitionMinimumScore : sniperMinimumScore
+bool longSniperQualityPass = not useSniperEngine or (longSniperArmed and sniperTimeframePass and adaptiveLongSniperScore >= longRequiredSniperScore and longRRPass and longNotExtended and m15BullCloseQuality)
+bool shortSniperQualityPass = not useSniperEngine or (shortSniperArmed and sniperTimeframePass and adaptiveShortSniperScore >= shortRequiredSniperScore and shortRRPass and shortNotExtended and m15BearCloseQuality)
+
+bool ltfLongPassBalanced = not useLTFPrecision or (useSniperEngine ? sniperBalancedLtfLong : balancedLtfLong)
+bool ltfShortPassBalanced = not useLTFPrecision or (useSniperEngine ? sniperBalancedLtfShort : balancedLtfShort)
+bool ltfLongPassPrecision = not useLTFPrecision or (useSniperEngine ? sniperPrecisionLtfLong : precisionLtfLong)
+bool ltfShortPassPrecision = not useLTFPrecision or (useSniperEngine ? sniperPrecisionLtfShort : precisionLtfShort)
+
+bool balancedLongGate = smcLongPass and fastLongPass and advancedLongStructurePass and longNoChase and longMarketCycleContext and mtfLongPass and ltfLongPassBalanced and longSniperQualityPass and (fibLongPass or smtLongPass or exceptionalLongCore or bullTransitionConfirmed)
+bool balancedShortGate = smcShortPass and fastShortPass and advancedShortStructurePass and shortNoChase and shortMarketCycleContext and mtfShortPass and ltfShortPassBalanced and shortSniperQualityPass and (fibShortPass or smtShortPass or exceptionalShortCore or bearTransitionConfirmed)
+bool precisionLongGate = smcLongPass and fibLongPass and smtLongPass and advancedLongStructurePass and bullishEmaRetest and longNoChase and longMarketCycleContext and mtfLongPass and ltfLongPassPrecision and longSniperQualityPass
+bool precisionShortGate = smcShortPass and fibShortPass and smtShortPass and advancedShortStructurePass and bearishEmaRetest and shortNoChase and shortMarketCycleContext and mtfShortPass and ltfShortPassPrecision and shortSniperQualityPass
+
+bool longEnhancementGate = confirmationMode == "Legacy" ? true : confirmationMode == "Precision" ? precisionLongGate : balancedLongGate
+bool shortEnhancementGate = confirmationMode == "Legacy" ? true : confirmationMode == "Precision" ? precisionShortGate : balancedShortGate
+
+bool longSignalRaw = baseLongSignalRaw and longEnhancementGate and not newsBlackoutActive
+bool shortSignalRaw = baseShortSignalRaw and shortEnhancementGate and not newsBlackoutActive
+bool longSetupWaiting = (baseLongSignalRaw or longSniperArmed) and not longEnhancementGate
+bool shortSetupWaiting = (baseShortSignalRaw or shortSniperArmed) and not shortEnhancementGate
+
+bool earlyBullWarning = confirmationGate and (bullishReversalContext or longM15Poi or bullTransitionWatch) and bullishFastCross and (wmaFlattening[1] or bullBandReentry or recentBullSMT or bullTransitionLiquidity)
+bool earlyBearWarning = confirmationGate and (bearishReversalContext or shortM15Poi or bearTransitionWatch) and bearishFastCross and (wmaFlattening[1] or bearBandReentry or recentBearSMT or bearTransitionLiquidity)
+
+string longSignalType = longSniperArmMode == 2 or bullTransitionConfirmed ? "BULL TRANSITION BUY" : tacticalPullbackLongWatch and structuralBias < 0 ? "TACTICAL PULLBACK BUY" : bullishReversalContext or mtfReversalLongContext ? "REVERSAL BUY" : "CONTINUATION BUY"
+string shortSignalType = shortSniperArmMode == 2 or bearTransitionConfirmed ? "BEAR TRANSITION SELL" : tacticalPullbackShortWatch and structuralBias > 0 ? "TACTICAL PULLBACK SELL" : bearishReversalContext or mtfReversalShortContext ? "REVERSAL SELL" : "CONTINUATION SELL"
+
+var int lastLongSignalBar = na
+var int lastShortSignalBar = na
+bool longSignal = longSignalRaw and (na(lastLongSignalBar) or bar_index - lastLongSignalBar >= signalCooldownBars)
+bool shortSignal = shortSignalRaw and (na(lastShortSignalBar) or bar_index - lastShortSignalBar >= signalCooldownBars)
+
+if longSignal
+    rememberedLongTriggerQuality := longTriggerQuality
+if shortSignal
+    rememberedShortTriggerQuality := shortTriggerQuality
+
+if longSignal
+    longSniperArmed := false
+    longSniperArmMode := 0
+if shortSignal
+    shortSniperArmed := false
+    shortSniperArmMode := 0
+
+var array<label> signalLabels = array.new<label>()
+var array<label> decisionLabels = array.new<label>()
+var array<label> tradeMapLabels = array.new<label>()
+
+if showLearningOutcomeLabels and learnedLongWinEvent
+    label item = label.new(bar_index, low, "LEARNED LONG WIN ✓\nMemory updated", style = label.style_label_up, color = color.new(color.lime, 20), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showLearningOutcomeLabels and learnedLongLossEvent
+    label item = label.new(bar_index, high, "LEARNED LONG LOSS ✕\nMemory updated", style = label.style_label_down, color = color.new(color.red, 20), textcolor = color.white, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showLearningOutcomeLabels and learnedShortWinEvent
+    label item = label.new(bar_index, high, "LEARNED SHORT WIN ✓\nMemory updated", style = label.style_label_down, color = color.new(color.lime, 20), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showLearningOutcomeLabels and learnedShortLossEvent
+    label item = label.new(bar_index, low, "LEARNED SHORT LOSS ✕\nMemory updated", style = label.style_label_up, color = color.new(color.red, 20), textcolor = color.white, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+
+// Decision milestones are historical evidence. They are not deleted when the market state changes;
+// only the oldest item is removed after the user-configured retention cap is exceeded.
+if showDecisionMilestones and freshLongArmEvent
+    string armType = transitionLongArmRaw ? "BULL TRANSITION ARMED" : "M15 BUY ARMED"
+    label item = label.new(bar_index, low, armType + "\nSetup " + str.tostring(longSetupQuality) + "/100 | Learn " + (longLearningReady ? str.tostring(longLearnedConfidence) + "%" : "warm " + str.tostring(longLearnTrials) + "/" + str.tostring(learningMinimumSamples)) + "\nZone " + f_price(low) + "–" + f_price(high), style = label.style_label_up, color = color.new(color.yellow, 8), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and freshShortArmEvent
+    string armType = transitionShortArmRaw ? "BEAR TRANSITION ARMED" : "M15 SELL ARMED"
+    label item = label.new(bar_index, high, armType + "\nSetup " + str.tostring(shortSetupQuality) + "/100 | Learn " + (shortLearningReady ? str.tostring(shortLearnedConfidence) + "%" : "warm " + str.tostring(shortLearnTrials) + "/" + str.tostring(learningMinimumSamples)) + "\nZone " + f_price(low) + "–" + f_price(high), style = label.style_label_down, color = color.new(color.yellow, 8), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+
+if showDecisionMilestones and longSniperArmed and bullLiquiditySweep
+    label item = label.new(bar_index, low, "SELL-SIDE LIQUIDITY ✓\nSweep + reclaim\nTrigger " + str.tostring(longTriggerQuality), style = label.style_label_up, color = color.new(color.aqua, 8), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and shortSniperArmed and bearLiquiditySweep
+    label item = label.new(bar_index, high, "BUY-SIDE LIQUIDITY ✓\nSweep + reject\nTrigger " + str.tostring(shortTriggerQuality), style = label.style_label_down, color = color.new(color.aqua, 8), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+
+if showDecisionMilestones and longSniperArmed and m3BullAfterArm and not m3BullAfterArm[1]
+    label item = label.new(bar_index, low, "M3 BULL VALIDATION ✓", style = label.style_label_up, color = color.new(color.lime, 25), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and shortSniperArmed and m3BearAfterArm and not m3BearAfterArm[1]
+    label item = label.new(bar_index, high, "M3 BEAR VALIDATION ✓", style = label.style_label_down, color = color.new(color.red, 25), textcolor = color.white, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and longSniperArmed and m5BullAfterArm and not m5BullAfterArm[1]
+    label item = label.new(bar_index, low, "M5 BULL MSS ✓\nEntry confirming", style = label.style_label_up, color = color.new(color.lime, 15), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and shortSniperArmed and m5BearAfterArm and not m5BearAfterArm[1]
+    label item = label.new(bar_index, high, "M5 BEAR MSS ✓\nEntry confirming", style = label.style_label_down, color = color.new(color.red, 15), textcolor = color.white, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+
+if showDecisionMilestones and upperSweepReaction
+    label item = label.new(bar_index, high, "UPPER OBJECTIVE SWEPT\nReassess → bearish reaction", style = label.style_label_down, color = color.new(color.red, 10), textcolor = color.white, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and lowerSweepReaction
+    label item = label.new(bar_index, low, "LOWER OBJECTIVE SWEPT\nReassess → bullish reaction", style = label.style_label_up, color = color.new(color.lime, 10), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and upperAcceptanceReaction
+    label item = label.new(bar_index, high, "UPPER OBJECTIVE ACCEPTED\nContinuation unlocked", style = label.style_label_up, color = color.new(color.lime, 15), textcolor = color.black, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+if showDecisionMilestones and lowerAcceptanceReaction
+    label item = label.new(bar_index, low, "LOWER OBJECTIVE ACCEPTED\nContinuation unlocked", style = label.style_label_down, color = color.new(color.red, 15), textcolor = color.white, size = size.tiny)
+    f_add_label(decisionLabels, item, maxSignalLabels)
+
+if longSignal
+    lastLongSignalBar := bar_index
+    if showSignalLabels
+        string tag = confirmationMode == "Legacy" ? "CORE" : confirmationMode == "Precision" ? "M15 SNIPER PRECISION" : "M15 SNIPER BALANCED"
+        label item = label.new(bar_index, low, longSignalType + "\nArm " + f_price(nz(rememberedLongArmClose, close)) + " → Confirm " + f_price(close) + "\nSetup/Trigger " + str.tostring(rememberedLongSetupQuality) + "/" + str.tostring(rememberedLongTriggerQuality) + " | RR " + str.tostring(longProjectedRR, "#.00") + "\n" + tag, style = label.style_label_up, color = color.lime, textcolor = color.black, size = size.small)
+        f_add_label(signalLabels, item, maxSignalLabels)
+if shortSignal
+    lastShortSignalBar := bar_index
+    if showSignalLabels
+        string tag = confirmationMode == "Legacy" ? "CORE" : confirmationMode == "Precision" ? "M15 SNIPER PRECISION" : "M15 SNIPER BALANCED"
+        label item = label.new(bar_index, high, shortSignalType + "\nArm " + f_price(nz(rememberedShortArmClose, close)) + " → Confirm " + f_price(close) + "\nSetup/Trigger " + str.tostring(rememberedShortSetupQuality) + "/" + str.tostring(rememberedShortTriggerQuality) + " | RR " + str.tostring(shortProjectedRR, "#.00") + "\n" + tag, style = label.style_label_down, color = color.red, textcolor = color.white, size = size.small)
+        f_add_label(signalLabels, item, maxSignalLabels)
+
+if showEarlyLabels and earlyBullWarning
+    label item = label.new(bar_index, low, "EARLY BULL FLIP\nWaiting for MSS/retest", style = label.style_label_up, color = color.new(color.orange, 10), textcolor = color.black, size = size.tiny)
+    f_add_label(signalLabels, item, maxSignalLabels)
+if showEarlyLabels and earlyBearWarning
+    label item = label.new(bar_index, high, "EARLY BEAR FLIP\nWaiting for MSS/retest", style = label.style_label_down, color = color.new(color.orange, 10), textcolor = color.black, size = size.tiny)
+    f_add_label(signalLabels, item, maxSignalLabels)
+if showWaitingLabels and longSetupWaiting and not longSetupWaiting[1]
+    string waitingLongText = longSniperArmMode == 2 ? "M15 BULL TRANSITION ARMED\nWaiting for M1/M3/M5" : "M15 BUY ARMED\nWaiting for sniper confirmation"
+    label item = label.new(bar_index, low, waitingLongText, style = label.style_label_up, color = color.new(color.yellow, 15), textcolor = color.black, size = size.tiny)
+    f_add_label(signalLabels, item, maxSignalLabels)
+if showWaitingLabels and shortSetupWaiting and not shortSetupWaiting[1]
+    string waitingShortText = shortSniperArmMode == 2 ? "M15 BEAR TRANSITION ARMED\nWaiting for M1/M3/M5" : "M15 SELL ARMED\nWaiting for sniper confirmation"
+    label item = label.new(bar_index, high, waitingShortText, style = label.style_label_down, color = color.new(color.yellow, 15), textcolor = color.black, size = size.tiny)
+    f_add_label(signalLabels, item, maxSignalLabels)
+
+// Latest execution lines remain current, but every historical trade-map LABEL is retained.
+var line sniperEntryLine = na
+var line sniperStopLine = na
+var line sniperTargetLine = na
+if (longSignal or shortSignal) and showSniperTradeMap
+    if not na(sniperEntryLine)
+        line.delete(sniperEntryLine)
+    if not na(sniperStopLine)
+        line.delete(sniperStopLine)
+    if not na(sniperTargetLine)
+        line.delete(sniperTargetLine)
+    float mapEntry = longSignal ? nz(rememberedLongArmClose, close) : nz(rememberedShortArmClose, close)
+    float mapStop = longSignal ? longSniperStop : shortSniperStop
+    float mapTarget = longSignal ? longSniperTarget : shortSniperTarget
+    color mapColor = longSignal ? color.lime : color.red
+    sniperEntryLine := line.new(bar_index, mapEntry, bar_index + 8, mapEntry, xloc = xloc.bar_index, extend = extend.right, color = color.new(mapColor, 25), width = 1)
+    sniperStopLine := line.new(bar_index, mapStop, bar_index + 8, mapStop, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.red, 20), style = line.style_dotted, width = 1)
+    if not na(mapTarget)
+        sniperTargetLine := line.new(bar_index, mapTarget, bar_index + 8, mapTarget, xloc = xloc.bar_index, extend = extend.right, color = color.new(color.aqua, 20), style = line.style_dashed, width = 1)
+    label mapLabel = label.new(bar_index, mapEntry, (longSignal ? "BUY" : "SELL") + " ARM " + f_price(mapEntry) + " | C " + f_price(close) + " | SL " + f_price(mapStop) + (not na(mapTarget) ? " | T1 " + f_price(mapTarget) : ""), style = label.style_label_left, color = color.new(color.black, 20), textcolor = color.white, size = size.tiny)
+    f_add_label(tradeMapLabels, mapLabel, maxSignalLabels)
+
+paintColor = longScore >= shortScore + minimumScoreEdge ? color.new(color.lime, 50) : shortScore >= longScore + minimumScoreEdge ? color.new(color.red, 50) : na
+barcolor(paintBars ? paintColor : na)
+
+// Hidden plots for Data Window and future strategy conversion.
+plot(longScore, "Long Score", display = display.none)
+plot(shortScore, "Short Score", display = display.none)
+plot(longQualityScore, "Long Quality Score", display = display.none)
+plot(shortQualityScore, "Short Quality Score", display = display.none)
+plot(relativeVolume, "Relative Volume", display = display.none)
+plot(activeObjectivePrice, "Active Objective", display = display.none)
+plot(longMtfScore, "Long MTF Alignment", display = display.none)
+plot(shortMtfScore, "Short MTF Alignment", display = display.none)
+plot(longLtfScore, "Long LTF Execution", display = display.none)
+plot(shortLtfScore, "Short LTF Execution", display = display.none)
+plot(longSniperScore, "Long Sniper Score", display = display.none)
+plot(shortSniperScore, "Short Sniper Score", display = display.none)
+plot(longProjectedRR, "Long Projected RR", display = display.none)
+plot(shortProjectedRR, "Short Projected RR", display = display.none)
+plot(mtfLongTarget, "HTF Long Target", display = display.none)
+plot(mtfShortTarget, "HTF Short Target", display = display.none)
+
+// ============================================================================
+// 13. v8 ORCHESTRATION + DECISIVE DASHBOARD
+// ============================================================================
+// The engine keeps all raw calculations, but the trader-facing Minimal dashboard only shows the synthesized plan.
+
+string dashboardPos = switch dashboardPosition
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left" => position.bottom_left
+    => position.top_right
+
+var table dashboard = table.new(dashboardPos, 2, 45, border_width = 1, frame_color = color.new(color.gray, 40), border_color = color.new(color.gray, 75))
+
+// Persistent active-call memory. A fired sniper remains ACTIVE until its first scoped objective is reached,
+// after which the dashboard explicitly enters TARGET HIT — REASSESS rather than silently reverting to "Wait".
+var int activeDecisionDir = 0
+var float activeDecisionEntry = na
+var float activeDecisionStop = na
+var float activeDecisionTarget = na
+var string activeDecisionType = "None"
+var bool activeDecisionTargetHit = false
+if longSignal
+    activeDecisionDir := 1
+    activeDecisionEntry := rememberedLongArmClose
+    activeDecisionStop := longSniperStop
+    activeDecisionTarget := longSniperTarget
+    activeDecisionType := longSignalType
+    activeDecisionTargetHit := false
+if shortSignal
+    activeDecisionDir := -1
+    activeDecisionEntry := rememberedShortArmClose
+    activeDecisionStop := shortSniperStop
+    activeDecisionTarget := shortSniperTarget
+    activeDecisionType := shortSignalType
+    activeDecisionTargetHit := false
+if activeDecisionDir == 1 and not activeDecisionTargetHit and not na(activeDecisionTarget) and high >= activeDecisionTarget
+    activeDecisionTargetHit := true
+if activeDecisionDir == -1 and not activeDecisionTargetHit and not na(activeDecisionTarget) and low <= activeDecisionTarget
+    activeDecisionTargetHit := true
+if activeDecisionTargetHit and (upperSweepReaction or lowerSweepReaction or upperAcceptanceReaction or lowerAcceptanceReaction)
+    activeDecisionDir := 0
+    activeDecisionTargetHit := false
+
+bool liveLongPlan = longSniperArmed or longSignal or activeDecisionDir == 1
+bool liveShortPlan = shortSniperArmed or shortSignal or activeDecisionDir == -1
+
+// Objective ladder: first scoped target, then the next higher/lower station only if T1 accepts.
+float liveLongT1 = longSniperArmed ? rememberedLongArmTarget : activeDecisionDir == 1 ? activeDecisionTarget : longSniperTarget
+float liveShortT1 = shortSniperArmed ? rememberedShortArmTarget : activeDecisionDir == -1 ? activeDecisionTarget : shortSniperTarget
+float liveLongT2 = na
+string liveLongT2Name = "None"
+if not na(liveLongT1)
+    if not na(h1Upper) and h1Upper > liveLongT1 + syminfo.mintick and (na(liveLongT2) or h1Upper < liveLongT2)
+        liveLongT2 := h1Upper
+        liveLongT2Name := "H1 Upper"
+    if not na(h2Upper) and h2Upper > liveLongT1 + syminfo.mintick and (na(liveLongT2) or h2Upper < liveLongT2)
+        liveLongT2 := h2Upper
+        liveLongT2Name := "H2 Upper"
+    if not na(h4Upper) and h4Upper > liveLongT1 + syminfo.mintick and (na(liveLongT2) or h4Upper < liveLongT2)
+        liveLongT2 := h4Upper
+        liveLongT2Name := "H4 Upper"
+    if not na(previousDayHigh) and previousDayHigh > liveLongT1 + syminfo.mintick and (na(liveLongT2) or previousDayHigh < liveLongT2)
+        liveLongT2 := previousDayHigh
+        liveLongT2Name := "PDH"
+    if not na(previousWeekHigh) and previousWeekHigh > liveLongT1 + syminfo.mintick and (na(liveLongT2) or previousWeekHigh < liveLongT2)
+        liveLongT2 := previousWeekHigh
+        liveLongT2Name := "PWH"
+float liveShortT2 = na
+string liveShortT2Name = "None"
+if not na(liveShortT1)
+    if not na(h1Lower) and h1Lower < liveShortT1 - syminfo.mintick and (na(liveShortT2) or h1Lower > liveShortT2)
+        liveShortT2 := h1Lower
+        liveShortT2Name := "H1 Lower"
+    if not na(h2Lower) and h2Lower < liveShortT1 - syminfo.mintick and (na(liveShortT2) or h2Lower > liveShortT2)
+        liveShortT2 := h2Lower
+        liveShortT2Name := "H2 Lower"
+    if not na(h4Lower) and h4Lower < liveShortT1 - syminfo.mintick and (na(liveShortT2) or h4Lower > liveShortT2)
+        liveShortT2 := h4Lower
+        liveShortT2Name := "H4 Lower"
+    if not na(previousDayLow) and previousDayLow < liveShortT1 - syminfo.mintick and (na(liveShortT2) or previousDayLow > liveShortT2)
+        liveShortT2 := previousDayLow
+        liveShortT2Name := "PDL"
+    if not na(previousWeekLow) and previousWeekLow < liveShortT1 - syminfo.mintick and (na(liveShortT2) or previousWeekLow > liveShortT2)
+        liveShortT2 := previousWeekLow
+        liveShortT2Name := "PWL"
+
+string regime = longTrendScore >= 15 and longTrendScore > shortTrendScore ? "Bullish" : shortTrendScore >= 15 and shortTrendScore > longTrendScore ? "Bearish" : "Range / mixed"
+string structureText = "Ext " + f_bias_text(externalStructureTrend) + " | Swing " + f_bias_text(structureTrend)
+string swingMapText = lastHighClass + " / " + lastLowClass + " | Int " + f_bias_text(internalTrend)
+string protectedText = "PH " + (na(protectedHigh) ? "n/a" : f_price(protectedHigh)) + " | PL " + (na(protectedLow) ? "n/a" : f_price(protectedLow))
+string nestedBandText = "H4 " + f_band_zone(h4PercentB) + " | H1 " + f_band_zone(h1PercentB) + " | M15 " + f_band_zone(m15PercentB)
+string biasText = "Struct " + f_bias_text(structuralBias) + " | Tactical " + f_bias_text(tacticalBias) + " | Owner " + bandOwner
+string nestedScoreText = str.tostring(longNestedBandScore) + "/" + str.tostring(shortNestedBandScore) + " | " + h4BasisState
+string dxyText = not useDXY ? "Disabled" : not dxyAvailable ? "Unavailable" : dxyBull ? "Bullish — gold headwind" : dxyBear ? "Bearish — gold support" : "Neutral"
+string smtText = recentBullSMT and recentBearSMT ? "Both recent" : recentBullSMT ? "Bullish SMT" : recentBearSMT ? "Bearish SMT" : not useSMTConfirmation ? "Disabled" : "No fresh divergence"
+string fibText = bullishFibLocation ? "Bull OTE valid" : bearishFibLocation ? "Bear OTE valid" : insideBullishOTE ? "Inside Bull OTE" : insideBearishOTE ? "Inside Bear OTE" : bullishFibReady or bearishFibReady ? "Dealing range active" : "Waiting for range"
+string smcText = longSMCConfirm and shortSMCConfirm ? "Both contexts" : longSMCConfirm ? "Bullish confirmed" : shortSMCConfirm ? "Bearish confirmed" : "Waiting"
+string fastMAText = bullishEmaRetest ? "Bullish 9 EMA retest" : bearishEmaRetest ? "Bearish 9 EMA retest" : bullishMomentumWrap ? "Bullish wrap" : bearishMomentumWrap ? "Bearish wrap" : wmaFlattening ? "WMA flattening" : wma5 > ema9 ? "Bullish fast alignment" : "Bearish fast alignment"
+string sessionText = inAsia ? "Asia" : inLondon ? "London" : inNewYork ? "New York" : "Between sessions"
+string zoneText = inBullOB ? "Inside Bull OB" : inBearOB ? "Inside Bear OB" : inBullFVG ? "Inside Bull FVG" : inBearFVG ? "Inside Bear FVG" : longM15Poi ? "Bullish M15 POI" : shortM15Poi ? "Bearish M15 POI" : "No active zone"
+string mtfCascadeText = "D " + str.tostring(d1Trend) + " " + f_phase_text(d1Phase) + " | H4 " + str.tostring(h4Trend) + " " + f_phase_text(h4Phase) + " | H2 " + str.tostring(h2Trend) + " " + f_phase_text(h2Phase) + " | H1 " + str.tostring(h1Trend) + " " + f_phase_text(h1Phase)
+string ltfCascadeText = "M5 " + str.tostring(m5BullScore) + "/" + str.tostring(m5BearScore) + " | M3 " + str.tostring(m3BullScore) + "/" + str.tostring(m3BearScore) + " | M1 " + str.tostring(m1BullScore) + "/" + str.tostring(m1BearScore)
+
+// Master market synthesis: translate apparently conflicting raw states into one market story.
+string marketSynthesis = bearTransitionWatch ? "Bull mature → bear transition watch" : bullTransitionWatch ? "Bear mature → bull transition watch" : structuralBias > 0 and tacticalBias < 0 ? "HTF Bull / M15 bearish pullback" : structuralBias < 0 and tacticalBias > 0 ? "HTF Bear / M15 bullish pullback" : structuralBias > 0 ? "Bull structure / continuation regime" : structuralBias < 0 ? "Bear structure / continuation regime" : "Mixed / range — wait for liquidity"
+
+// Liquidity is the central event sequencer. For an armed setup, tell the trader what liquidity has/has not happened.
+string liquidityStage = longSniperArmed ? (bullLiquidityAfterArm ? "Sell-side swept + reclaimed ✓" : not na(nearestBelow) ? "Sell-side ahead @ " + f_price(nearestBelow) : "Waiting for sell-side sweep") : shortSniperArmed ? (bearLiquidityAfterArm ? "Buy-side swept + rejected ✓" : not na(nearestAbove) ? "Buy-side ahead @ " + f_price(nearestAbove) : "Waiting for buy-side sweep") : recentLowerSweepReaction ? "Sell-side objective swept → bull reaction" : recentUpperSweepReaction ? "Buy-side objective swept → bear reaction" : objectiveTouched ? "Objective touched — classifying" : activeObjectiveDir == 1 ? "Seeking buy-side @ " + f_price(activeObjectivePrice) : activeObjectiveDir == -1 ? "Seeking sell-side @ " + f_price(activeObjectivePrice) : "Liquidity map reassessing"
+
+// Separate the quality of WHERE from the quality of WHEN.
+int liveSetupQuality = longSniperArmed ? rememberedLongSetupQuality : shortSniperArmed ? rememberedShortSetupQuality : activeDecisionDir == 1 ? rememberedLongSetupQuality : activeDecisionDir == -1 ? rememberedShortSetupQuality : math.max(longSetupQuality, shortSetupQuality)
+int liveTriggerQuality = longSniperArmed ? longTriggerQuality : shortSniperArmed ? shortTriggerQuality : activeDecisionDir == 1 ? rememberedLongTriggerQuality : activeDecisionDir == -1 ? rememberedShortTriggerQuality : math.max(longTriggerQuality, shortTriggerQuality)
+
+// Decisive call state. More intelligence changes selection/classification, not the original arm candle.
+string decisiveCall = "WAIT / SCANNING"
+color callColor = color.silver
+if upperSweepReaction
+    decisiveCall := "TARGET SWEPT — SELL WATCH"
+    callColor := color.red
+else if lowerSweepReaction
+    decisiveCall := "TARGET SWEPT — BUY WATCH"
+    callColor := color.lime
+else if upperAcceptanceReaction
+    decisiveCall := "TARGET ACCEPTED — BUY CONTINUATION"
+    callColor := color.lime
+else if lowerAcceptanceReaction
+    decisiveCall := "TARGET ACCEPTED — SELL CONTINUATION"
+    callColor := color.red
+else if activeDecisionTargetHit
+    decisiveCall := "TARGET HIT — REASSESS"
+    callColor := color.aqua
+else if longSignal
+    decisiveCall := "M15 SNIPER BUY"
+    callColor := color.lime
+else if shortSignal
+    decisiveCall := "M15 SNIPER SELL"
+    callColor := color.red
+else if longSniperArmed and bullLiquidityAfterArm and m3BullAfterArm and m5BullAfterArm
+    decisiveCall := "BUY CONFIRMING"
+    callColor := color.lime
+else if shortSniperArmed and bearLiquidityAfterArm and m3BearAfterArm and m5BearAfterArm
+    decisiveCall := "SELL CONFIRMING"
+    callColor := color.red
+else if longSniperArmed
+    decisiveCall := longSniperArmMode == 2 ? "BULL TRANSITION ARMED" : "BUY ARMED"
+    callColor := color.orange
+else if shortSniperArmed
+    decisiveCall := shortSniperArmMode == 2 ? "BEAR TRANSITION ARMED" : "SELL ARMED"
+    callColor := color.orange
+else if activeDecisionDir == 1
+    decisiveCall := activeDecisionType + " — ACTIVE"
+    callColor := color.lime
+else if activeDecisionDir == -1
+    decisiveCall := activeDecisionType + " — ACTIVE"
+    callColor := color.red
+else if blockFreshLongsForBearTransition or bearTransitionWatch
+    decisiveCall := "SELL WATCH — NO NEW BUY"
+    callColor := color.red
+else if blockFreshShortsForBullTransition or bullTransitionWatch
+    decisiveCall := "BUY WATCH — NO NEW SELL"
+    callColor := color.lime
+else if earlyBullWarning
+    decisiveCall := "EARLY BUY WATCH"
+    callColor := color.orange
+else if earlyBearWarning
+    decisiveCall := "EARLY SELL WATCH"
+    callColor := color.orange
+
+string whyText = "Waiting for location + liquidity + structure"
+if longSniperArmed or longSignal or activeDecisionDir == 1
+    whyText := (rememberedLongArmMode == 2 ? "Lower exhaustion" : structuralBias > 0 ? "HTF bull" : "Bull reversal") + " + " + (lastLowClass == "HL" or lastLowClass == "EQL" ? lastLowClass + " POI" : "M15 POI") + " + " + (bullLiquidityAfterArm or recentBullSweep ? "sell-side sweep" : "liquidity below")
+else if shortSniperArmed or shortSignal or activeDecisionDir == -1
+    whyText := (rememberedShortArmMode == 2 ? "Upper exhaustion" : structuralBias < 0 ? "HTF bear" : "Bear reversal") + " + " + (lastHighClass == "LH" or lastHighClass == "EQH" ? lastHighClass + " POI" : "M15 POI") + " + " + (bearLiquidityAfterArm or recentBearSweep ? "buy-side sweep" : "liquidity above")
+else if bearTransitionWatch
+    whyText := "Mature bull + upper exhaustion + bearish shift"
+else if bullTransitionWatch
+    whyText := "Mature bear + lower exhaustion + bullish shift"
+else if activeObjectiveDir != 0
+    whyText := "Structure + bands point to " + activeObjectiveName
+
+string waitingText = "Need valid M15 POI"
+if longSniperArmed
+    waitingText := not bullLiquidityAfterArm and (longSniperArmMode == 2 or transitionRequireLiquidity) ? "Sell-side sweep/reclaim" : useLTFPrecision and not m1BullAfterArm ? "M1 bullish initiation" : useLTFPrecision and not m3BullAfterArm ? "M3 bullish CHoCH/MSS" : useLTFPrecision and not m5BullAfterArm ? "M5 bullish MSS" : requireLtfRetest and not bullRetestAfterArm ? "M1/M3 retest" : confirmationMode == "Precision" and not fibLongPass ? "Fib OTE alignment" : confirmationMode == "Precision" and not smtLongPass ? "SMT confirmation" : not longRRPass ? "Target room / RR" : "Final trigger close"
+else if shortSniperArmed
+    waitingText := not bearLiquidityAfterArm and (shortSniperArmMode == 2 or transitionRequireLiquidity) ? "Buy-side sweep/reject" : useLTFPrecision and not m1BearAfterArm ? "M1 bearish initiation" : useLTFPrecision and not m3BearAfterArm ? "M3 bearish CHoCH/MSS" : useLTFPrecision and not m5BearAfterArm ? "M5 bearish MSS" : requireLtfRetest and not bearRetestAfterArm ? "M1/M3 retest" : confirmationMode == "Precision" and not fibShortPass ? "Fib OTE alignment" : confirmationMode == "Precision" and not smtShortPass ? "SMT confirmation" : not shortRRPass ? "Target room / RR" : "Final trigger close"
+else if activeDecisionTargetHit
+    waitingText := "Reaction: sweep/reject or acceptance"
+else if activeDecisionDir != 0
+    waitingText := "T1 reaction before unlocking T2"
+else if bearTransitionWatch
+    waitingText := "Bear liquidity + M15/M5 structure"
+else if bullTransitionWatch
+    waitingText := "Bull liquidity + M15/M5 structure"
+else if activeObjectiveDir != 0
+    waitingText := "Price to objective, then classify reaction"
+
+string entryText = longSniperArmed ? f_price(rememberedLongArmLow) + "–" + f_price(rememberedLongArmHigh) + " | arm " + f_price(rememberedLongArmClose) : shortSniperArmed ? f_price(rememberedShortArmLow) + "–" + f_price(rememberedShortArmHigh) + " | arm " + f_price(rememberedShortArmClose) : activeDecisionDir != 0 ? f_price(activeDecisionEntry) + " confirmed" : longM15Poi ? "Bull M15 POI near " + f_price(close) : shortM15Poi ? "Bear M15 POI near " + f_price(close) : "Not armed"
+string invalidationText = longSniperArmed ? "Below " + f_price(rememberedLongArmStop) : shortSniperArmed ? "Above " + f_price(rememberedShortArmStop) : activeDecisionDir == 1 ? "Below " + f_price(activeDecisionStop) : activeDecisionDir == -1 ? "Above " + f_price(activeDecisionStop) : not na(protectedLow) and structuralBias > 0 ? "Protected low " + f_price(protectedLow) : not na(protectedHigh) and structuralBias < 0 ? "Protected high " + f_price(protectedHigh) : "Await structure"
+string objectiveLadderText = "Reassessing"
+if liveLongPlan and not na(liveLongT1)
+    objectiveLadderText := "T1 " + f_price(liveLongT1) + (not na(liveLongT2) ? " → T2 " + f_price(liveLongT2) + " if T1 accepts" : " → reassess")
+else if liveShortPlan and not na(liveShortT1)
+    objectiveLadderText := "T1 " + f_price(liveShortT1) + (not na(liveShortT2) ? " → T2 " + f_price(liveShortT2) + " if T1 accepts" : " → reassess")
+else if activeObjectiveDir != 0 and not na(activeObjectivePrice)
+    objectiveLadderText := activeObjectiveName + " " + f_price(activeObjectivePrice) + " → classify reaction"
+
+string corePressureText = longScore > shortScore ? "Buy " + str.tostring(longScore) + " : " + str.tostring(shortScore) + " Sell" : shortScore > longScore ? "Sell " + str.tostring(shortScore) + " : " + str.tostring(longScore) + " Buy" : "Balanced " + str.tostring(longScore) + ":" + str.tostring(shortScore)
+string setupTriggerText = "Setup " + str.tostring(liveSetupQuality) + " | Trigger " + str.tostring(liveTriggerQuality)
+int liveLearnConfidence = liveLongPlan ? longLearnedConfidence : liveShortPlan ? shortLearnedConfidence : longLearnedConfidence >= shortLearnedConfidence ? longLearnedConfidence : shortLearnedConfidence
+int liveLearnTrials = liveLongPlan ? longLearnTrials : liveShortPlan ? shortLearnTrials : math.max(longLearnTrials, shortLearnTrials)
+int liveLearnAdjustment = liveLongPlan ? longLearningAdjustment : liveShortPlan ? shortLearningAdjustment : 0
+string learningText = not useAdaptiveLearning ? "Off" : liveLearnTrials < learningMinimumSamples ? "Warming " + str.tostring(liveLearnTrials) + "/" + str.tostring(learningMinimumSamples) : str.tostring(liveLearnConfidence) + "% | adj " + (liveLearnAdjustment >= 0 ? "+" : "") + str.tostring(liveLearnAdjustment) + " | N=" + str.tostring(liveLearnTrials)
+string learningRecordText = "L " + str.tostring(learnLongWins) + "W/" + str.tostring(learnLongLosses) + "L/" + str.tostring(learnLongTimeouts) + "T | S " + str.tostring(learnShortWins) + "W/" + str.tostring(learnShortLosses) + "L/" + str.tostring(learnShortTimeouts) + "T"
+string rrText = liveLongPlan ? str.tostring(longProjectedRR, "#.00") + "R long" : liveShortPlan ? str.tostring(shortProjectedRR, "#.00") + "R short" : str.tostring(longProjectedRR, "#.00") + "R / " + str.tostring(shortProjectedRR, "#.00") + "R"
+string ltfStateText = sniperPrecisionLtfLong ? "Bull sequence confirmed" : sniperPrecisionLtfShort ? "Bear sequence confirmed" : sniperBalancedLtfLong ? "Bull validation" : sniperBalancedLtfShort ? "Bear validation" : "Waiting for setup-linked LTF"
+
+if barstate.islast and showDashboard
+    table.clear(dashboard, 0, 0, 1, 44)
+    // The first 8 rows are identical in every mode: one clear market story and plan.
+    table.cell(dashboard, 0, 0, "BG GOLD SRE v9", bgcolor = color.black, text_color = color.white)
+    table.cell(dashboard, 1, 0, confirmationMode + " / " + displayMode, bgcolor = color.black, text_color = color.aqua)
+    table.cell(dashboard, 0, 1, "Market", text_color = color.silver)
+    table.cell(dashboard, 1, 1, marketSynthesis, text_color = bearTransitionWatch ? color.red : bullTransitionWatch ? color.lime : structuralBias > 0 ? color.lime : structuralBias < 0 ? color.red : color.orange, text_size = size.tiny)
+    table.cell(dashboard, 0, 2, "Current call", bgcolor = color.new(callColor, 82), text_color = color.white)
+    table.cell(dashboard, 1, 2, decisiveCall, bgcolor = color.new(callColor, 82), text_color = callColor)
+    table.cell(dashboard, 0, 3, "Why", text_color = color.silver)
+    table.cell(dashboard, 1, 3, whyText + (useAdaptiveLearning ? " | Learn " + (liveLearnTrials >= learningMinimumSamples ? str.tostring(liveLearnConfidence) + "%" : "warming") : ""), text_color = color.white, text_size = size.tiny)
+    table.cell(dashboard, 0, 4, "Waiting for", text_color = color.silver)
+    table.cell(dashboard, 1, 4, waitingText, text_color = waitingText == "Final trigger close" ? color.aqua : color.yellow, text_size = size.tiny)
+    table.cell(dashboard, 0, 5, "Entry", text_color = color.silver)
+    table.cell(dashboard, 1, 5, entryText, text_color = longSniperArmed or activeDecisionDir == 1 ? color.lime : shortSniperArmed or activeDecisionDir == -1 ? color.red : color.white, text_size = size.tiny)
+    table.cell(dashboard, 0, 6, "Objective", text_color = color.silver)
+    table.cell(dashboard, 1, 6, objectiveLadderText, text_color = color.aqua, text_size = size.tiny)
+    table.cell(dashboard, 0, 7, "Invalidation", text_color = color.silver)
+    table.cell(dashboard, 1, 7, invalidationText, text_color = color.orange, text_size = size.tiny)
+
+    if isStandard or isFull
+        table.cell(dashboard, 0, 8, "Setup / Trigger", text_color = color.silver)
+        table.cell(dashboard, 1, 8, setupTriggerText, text_color = liveTriggerQuality >= 75 ? color.lime : liveSetupQuality >= 75 ? color.yellow : color.orange)
+        table.cell(dashboard, 0, 9, "Core B:S", text_color = color.silver)
+        table.cell(dashboard, 1, 9, corePressureText, text_color = longScore > shortScore ? color.lime : shortScore > longScore ? color.red : color.orange)
+        table.cell(dashboard, 0, 10, "Liquidity", text_color = color.silver)
+        table.cell(dashboard, 1, 10, liquidityStage, text_color = bullLiquidityAfterArm or recentLowerSweepReaction ? color.lime : bearLiquidityAfterArm or recentUpperSweepReaction ? color.red : color.aqua, text_size = size.tiny)
+        table.cell(dashboard, 0, 11, "Structure", text_color = color.silver)
+        table.cell(dashboard, 1, 11, structureText + " | " + swingMapText, text_color = externalStructureTrend > 0 ? color.lime : externalStructureTrend < 0 ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 12, "Bands / owner", text_color = color.silver)
+        table.cell(dashboard, 1, 12, nestedBandText + " | " + bandOwner, text_color = tacticalBias > 0 ? color.lime : tacticalBias < 0 ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 13, "SMC / SMT", text_color = color.silver)
+        table.cell(dashboard, 1, 13, smcText + " | " + smtText, text_color = longSMCConfirm or recentBullSMT ? color.lime : shortSMCConfirm or recentBearSMT ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 14, "LTF", text_color = color.silver)
+        table.cell(dashboard, 1, 14, ltfStateText + " | " + ltfCascadeText, text_color = sniperBalancedLtfLong or sniperPrecisionLtfLong ? color.lime : sniperBalancedLtfShort or sniperPrecisionLtfShort ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 15, "Learning / RR", text_color = color.silver)
+        table.cell(dashboard, 1, 15, learningText + " | " + rrText + (newsBlackoutActive ? " | BLACKOUT" : ""), text_color = newsBlackoutActive ? color.red : liveLearnConfidence >= 65 and liveLearnTrials >= learningMinimumSamples ? color.lime : color.aqua, text_size = size.tiny)
+
+    if isFull
+        // Full mode remains diagnostic; nothing has been removed from the engine, only organized beneath the decisive plan.
+        table.cell(dashboard, 0, 16, "Weekly profile", text_color = color.silver)
+        table.cell(dashboard, 1, 16, weeklyProfile, text_color = color.yellow, text_size = size.tiny)
+        table.cell(dashboard, 0, 17, "Market phase", text_color = color.silver)
+        table.cell(dashboard, 1, 17, marketPhase, text_color = color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 18, "MA / Fast", text_color = color.silver)
+        table.cell(dashboard, 1, 18, maRegime + " | " + fastMAText, text_color = bullishMAStack ? color.lime : bearishMAStack ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 19, "Fibonacci", text_color = color.silver)
+        table.cell(dashboard, 1, 19, fibText, text_color = bullishFibLocation ? color.lime : bearishFibLocation ? color.red : color.orange)
+        table.cell(dashboard, 0, 20, "DXY", text_color = color.silver)
+        table.cell(dashboard, 1, 20, dxyText, text_color = dxyBear ? color.lime : dxyBull ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 21, "Location", text_color = color.silver)
+        table.cell(dashboard, 1, 21, zoneText + " | " + sessionText, text_color = color.white, text_size = size.tiny)
+        table.cell(dashboard, 0, 22, "RVOL", text_color = color.silver)
+        table.cell(dashboard, 1, 22, na(relativeVolume) ? "n/a" : str.tostring(relativeVolume, "#.00") + "×", text_color = highRelativeVolume ? color.aqua : color.silver)
+        table.cell(dashboard, 0, 23, "HTF cascade", text_color = color.silver)
+        table.cell(dashboard, 1, 23, mtfCascadeText, text_color = longMtfScore > shortMtfScore ? color.lime : shortMtfScore > longMtfScore ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 24, "HTF scores", text_color = color.silver)
+        table.cell(dashboard, 1, 24, "L/S " + str.tostring(longMtfScore) + "/" + str.tostring(shortMtfScore), text_color = color.aqua)
+        table.cell(dashboard, 0, 25, "Protected", text_color = color.silver)
+        table.cell(dashboard, 1, 25, protectedText, text_color = protectedLowIntact ? color.lime : protectedHighIntact ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 26, "Bias / owner", text_color = color.silver)
+        table.cell(dashboard, 1, 26, biasText, text_color = tacticalBias > 0 ? color.lime : tacticalBias < 0 ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 27, "Band path", text_color = color.silver)
+        table.cell(dashboard, 1, 27, nestedPathText + " | BB " + nestedScoreText, text_color = color.aqua, text_size = size.tiny)
+        table.cell(dashboard, 0, 28, "Regime state", text_color = color.silver)
+        table.cell(dashboard, 1, 28, regimeTransitionState, text_color = bearTransitionConfirmed or bearTransitionWatch ? color.red : bullTransitionConfirmed or bullTransitionWatch ? color.lime : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 29, "Transition B/S", text_color = color.silver)
+        table.cell(dashboard, 1, 29, str.tostring(bullTransitionWatchScore) + "/" + str.tostring(bearTransitionWatchScore) + " | swings " + str.tostring(bullSwingRun) + "/" + str.tostring(bearSwingRun), text_color = bullTransitionWatchScore > bearTransitionWatchScore ? color.lime : bearTransitionWatchScore > bullTransitionWatchScore ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 30, "Transition control", text_color = color.silver)
+        table.cell(dashboard, 1, 30, blockFreshLongsForBearTransition ? "PAUSE NEW BUYS" : blockFreshShortsForBullTransition ? "PAUSE NEW SELLS" : bearTransitionWatch ? "Bear watch → " + bearTransitionTargetName : bullTransitionWatch ? "Bull watch → " + bullTransitionTargetName : "Normal continuation rules", text_color = blockFreshLongsForBearTransition ? color.red : blockFreshShortsForBullTransition ? color.lime : color.aqua, text_size = size.tiny)
+        table.cell(dashboard, 0, 31, "Quality L/S", text_color = color.silver)
+        table.cell(dashboard, 1, 31, "Setup " + str.tostring(longSetupQuality) + "/" + str.tostring(shortSetupQuality) + " | Sniper " + str.tostring(longSniperScore) + "/" + str.tostring(shortSniperScore), text_color = color.aqua, text_size = size.tiny)
+        table.cell(dashboard, 0, 32, "LTF execution", text_color = color.silver)
+        table.cell(dashboard, 1, 32, "Trigger " + str.tostring(longTriggerQuality) + "/" + str.tostring(shortTriggerQuality) + " | LTF " + str.tostring(longLtfScore) + "/" + str.tostring(shortLtfScore), text_color = color.aqua, text_size = size.tiny)
+        table.cell(dashboard, 0, 33, "Nested score", text_color = color.silver)
+        table.cell(dashboard, 1, 33, nestedScoreText, text_color = color.aqua)
+        table.cell(dashboard, 0, 34, "Core quality", text_color = color.silver)
+        table.cell(dashboard, 1, 34, "Q " + str.tostring(longQualityScore) + "/" + str.tostring(shortQualityScore), text_color = longQualityScore > shortQualityScore ? color.lime : shortQualityScore > longQualityScore ? color.red : color.orange)
+        table.cell(dashboard, 0, 35, "Adaptive confidence", text_color = color.silver)
+        table.cell(dashboard, 1, 35, "L " + str.tostring(longLearnedConfidence) + "% | S " + str.tostring(shortLearnedConfidence) + "%", text_color = longLearnedConfidence > shortLearnedConfidence ? color.lime : shortLearnedConfidence > longLearnedConfidence ? color.red : color.orange)
+        table.cell(dashboard, 0, 36, "Learning record", text_color = color.silver)
+        table.cell(dashboard, 1, 36, learningRecordText, text_color = color.aqua, text_size = size.tiny)
+        table.cell(dashboard, 0, 37, "Adaptive score", text_color = color.silver)
+        table.cell(dashboard, 1, 37, "L " + str.tostring(adaptiveLongSniperScore) + " (" + (longLearningAdjustment >= 0 ? "+" : "") + str.tostring(longLearningAdjustment) + ") | S " + str.tostring(adaptiveShortSniperScore) + " (" + (shortLearningAdjustment >= 0 ? "+" : "") + str.tostring(shortLearningAdjustment) + ")", text_color = adaptiveLongSniperScore > adaptiveShortSniperScore ? color.lime : adaptiveShortSniperScore > adaptiveLongSniperScore ? color.red : color.orange, text_size = size.tiny)
+        table.cell(dashboard, 0, 38, "Learning model", text_color = color.silver)
+        table.cell(dashboard, 1, 38, learningMode + " | " + learningOutcomeMode + (learningOutcomeMode == "R Multiple" ? " " + str.tostring(learningSuccessR, "#.0") + "R" : "") + " | prior " + str.tostring(learningPriorWinRate * 100.0, "#.0") + "%", text_color = color.aqua, text_size = size.tiny)
+
+if barstate.islast and not showDashboard
+    table.clear(dashboard, 0, 0, 1, 44)
+
+// ============================================================================
+// 14. ALERTS — PLOT-COUNT LEAN
+// ============================================================================
+
+// Keep only the alerts traders actually need. Auxiliary state remains visible in the dashboard and dynamic final alert.
+alertcondition(longSniperArmed and not longSniperArmed[1], "BG SRE v9 — M15 BUY armed", "M15 BUY setup armed on {{ticker}}. Waiting for setup-linked M1/M3/M5 confirmation.")
+alertcondition(shortSniperArmed and not shortSniperArmed[1], "BG SRE v9 — M15 SELL armed", "M15 SELL setup armed on {{ticker}}. Waiting for setup-linked M1/M3/M5 confirmation.")
+alertcondition(longSignal, "BG SRE v9 — SNIPER BUY", "Confirmed M15 sniper BUY on {{ticker}}. HTF, M15 and setup-linked lower-timeframe confirmation passed.")
+alertcondition(shortSignal, "BG SRE v9 — SNIPER SELL", "Confirmed M15 sniper SELL on {{ticker}}. HTF, M15 and setup-linked lower-timeframe confirmation passed.")
+alertcondition(earlyBullWarning, "BG SRE v9 — Early bullish watch", "Bullish M15/LTF reversal watch on {{ticker}}. Final sniper gate has not passed yet.")
+alertcondition(earlyBearWarning, "BG SRE v9 — Early bearish watch", "Bearish M15/LTF reversal watch on {{ticker}}. Final sniper gate has not passed yet.")
+
+if enableDynamicAlerts and longSignal
+    alert("BG SRE v9 | " + longSignalType + " | " + syminfo.ticker + " | Price " + f_price(close) + " | Sniper " + str.tostring(longSniperScore) + "/100 | Adaptive " + str.tostring(adaptiveLongSniperScore) + "/100 | Learn " + str.tostring(longLearnedConfidence) + "% N=" + str.tostring(longLearnTrials) + " | Core " + str.tostring(longScore) + "/100 | Context " + str.tostring(longContextScore) + "/100 | Transition " + str.tostring(bullTransitionWatchScore) + "/100 | MTF " + str.tostring(longMtfScore) + "/100 | Structure " + str.tostring(longAdvancedStructureScore) + "/100 | BB " + str.tostring(longNestedBandScore) + "/100 | LTF " + str.tostring(longLtfScore) + "/100 | RR " + str.tostring(longProjectedRR, "#.00") + " | SL " + f_price(longSniperStop) + " | TP " + f_price(longSniperTarget), alert.freq_once_per_bar_close)
+if enableDynamicAlerts and shortSignal
+    alert("BG SRE v9 | " + shortSignalType + " | " + syminfo.ticker + " | Price " + f_price(close) + " | Sniper " + str.tostring(shortSniperScore) + "/100 | Adaptive " + str.tostring(adaptiveShortSniperScore) + "/100 | Learn " + str.tostring(shortLearnedConfidence) + "% N=" + str.tostring(shortLearnTrials) + " | Core " + str.tostring(shortScore) + "/100 | Context " + str.tostring(shortContextScore) + "/100 | Transition " + str.tostring(bearTransitionWatchScore) + "/100 | MTF " + str.tostring(shortMtfScore) + "/100 | Structure " + str.tostring(shortAdvancedStructureScore) + "/100 | BB " + str.tostring(shortNestedBandScore) + "/100 | LTF " + str.tostring(shortLtfScore) + "/100 | RR " + str.tostring(shortProjectedRR, "#.00") + " | SL " + f_price(shortSniperStop) + " | TP " + f_price(shortSniperTarget), alert.freq_once_per_bar_close)
+if enableDynamicAlerts and alertOnEarlyWarning and earlyBullWarning
+    alert("BG SRE v9 | EARLY BULL WATCH | " + syminfo.ticker + " | M15 POI/fast flip detected. Waiting for setup-linked M3/M5 validation.", alert.freq_once_per_bar_close)
+if enableDynamicAlerts and alertOnEarlyWarning and earlyBearWarning
+    alert("BG SRE v9 | EARLY BEAR WATCH | " + syminfo.ticker + " | M15 POI/fast flip detected. Waiting for setup-linked M3/M5 validation.", alert.freq_once_per_bar_close)
