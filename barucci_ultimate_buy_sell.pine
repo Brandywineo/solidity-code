@@ -1973,8 +1973,8 @@ bool ult_longSniperEvent = ult_bullCisdEvent and ult_longContextPass and ult_lon
 bool ult_shortSniperEvent = ult_bearCisdEvent and ult_shortContextPass and ult_shortRRPass and shortNoChase and ult_shortQuality >= ultimateMinimumScore
 
 // A+ is a grade upgrade, not a prerequisite for the original Ultimate signal candle.
-bool ult_longAPlus = ult_longSniperEvent and ((ultimateUseCandle2 and ult_c2Bull) or recentBullSMT or recentBullExternalCHoCH or recentBullInternalCHoCH or sniperBalancedLtfLong)
-bool ult_shortAPlus = ult_shortSniperEvent and ((ultimateUseCandle2 and ult_c2Bear) or recentBearSMT or recentBearExternalCHoCH or recentBearInternalCHoCH or sniperBalancedLtfShort)
+bool ult_longAPlus = ult_longSniperEvent and ((ultimateUseCandle2 and ult_c2Bull) or recentBullSMT or recentBullExternalCHoCH or recentBullInternalCHoCH or balancedLtfLong)
+bool ult_shortAPlus = ult_shortSniperEvent and ((ultimateUseCandle2 and ult_c2Bear) or recentBearSMT or recentBearExternalCHoCH or recentBearInternalCHoCH or balancedLtfShort)
 
 
 // Arm the setup before accepting lower-timeframe confirmations. Normal continuation and regime-transition arms are separate paths.
