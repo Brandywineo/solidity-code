@@ -117,7 +117,8 @@ indalert    = true
 legGroup = "Legendary — Delivery Engine"
 legEnabled              = input.bool(true, "Enable Legendary delivery engine", group=legGroup)
 legConfirmedOnly        = input.bool(true, "Legendary signals on closed bars", group=legGroup)
-legShowRawCisd          = input.bool(false, "Show original raw CISD arrows", group=legGroup, tooltip="Off by default. Legendary classifies opposite CISDs as pullbacks/reversals instead of showing every raw flip.")
+legShowRawCisd          = input.bool(false, "Show original raw CISD visuals", group=legGroup, tooltip="Off by default. Legendary classifies opposite CISDs as pullbacks/reversals instead of showing every raw flip.")
+legRawAlerts            = input.bool(false, "Enable original raw CISD alerts", group=legGroup, tooltip="Off by default so weak opposite CISDs do not interrupt Legendary alerts.")
 legShowLabels           = input.bool(true, "Show Legendary historical labels", group=legGroup)
 legMaxLabels            = input.int(75, "Retained Legendary labels", minval=20, maxval=180, group=legGroup)
 legShowDashboard        = input.bool(true, "Show Legendary dashboard", group=legGroup)
@@ -375,9 +376,10 @@ bool legBearCisdNow = legEnabled and legBarConfirmed and not ycisd and bar_index
 // ============================================================================
 xbull = close[1] > bull_level and (l_swept[1] or (l1 <= l0 and l_swept1)) and xcisd == false and bar_index - 1 >= bull_index
 if xbull
-    box.new(bull_index, bull_level, bar_index - 1, bull_level, border_color=bull_csd_color, border_width=1, text="BULL", text_color=bull_csd_color, text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_bottom)
+    if legShowRawCisd
+        box.new(bull_index, bull_level, bar_index - 1, bull_level, border_color=bull_csd_color, border_width=1, text="BULL", text_color=bull_csd_color, text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_bottom)
     bull_alarm := true
-    if indalert
+    if indalert and (not legEnabled or legRawAlerts)
         alert(syminfo.tickerid + "," + timeframe.period + ",Bullish", alert.freq_once_per_bar)
     bull_level := 1000000.0
     xcisd := true
@@ -390,9 +392,10 @@ else if showUnswept and close[1] > bull_level and xcisd == false and bar_index -
 
 xbear = close[1] < bear_level and (h_swept[1] or (h1 >= h0 and h_swept1)) and ycisd == false and bar_index - 1 >= bear_index
 if xbear
-    box.new(bear_index, bear_level, bar_index - 1, bear_level, border_color=bear_csd_color, border_width=1, text="BEAR", text_color=bear_csd_color, text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_top)
+    if legShowRawCisd
+        box.new(bear_index, bear_level, bar_index - 1, bear_level, border_color=bear_csd_color, border_width=1, text="BEAR", text_color=bear_csd_color, text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_top)
     bear_alarm := true
-    if indalert
+    if indalert and (not legEnabled or legRawAlerts)
         alert(syminfo.tickerid + "," + timeframe.period + ",Bearish", alert.freq_once_per_bar)
     bear_level := 0.0
     ycisd := true
@@ -769,6 +772,7 @@ f_leg_bear_objective() =>
 var int legDelivery = 0
 var float legEntry = na
 var float legObjective = na
+var float legActiveCisd = na
 var bool legObjectiveHit = false
 var int legDeliveryStartBar = na
 var string legLastEvent = "WAIT"
@@ -819,28 +823,34 @@ bool legBearReentry = legEnabled and legReentryEnabled and legDelivery == -1 and
 if legBullStart or legBullReversal
     legDelivery := 1
     legEntry := close
+    legActiveCisd := legBullCisdSnapshot
     legObjective := f_leg_bull_objective()
     legObjectiveHit := false
     legDeliveryStartBar := bar_index
     legProtectedLow := not na(legLastSwingLow) ? legLastSwingLow : low
     legProtectedHigh := na
+    legLastOppositeCisdBar := na
     legLastEvent := legBullReversal ? "REVERSAL BUY" : "SNIPER BUY"
 else if legBearStart or legBearReversal
     legDelivery := -1
     legEntry := close
+    legActiveCisd := legBearCisdSnapshot
     legObjective := f_leg_bear_objective()
     legObjectiveHit := false
     legDeliveryStartBar := bar_index
     legProtectedHigh := not na(legLastSwingHigh) ? legLastSwingHigh : high
     legProtectedLow := na
+    legLastOppositeCisdBar := na
     legLastEvent := legBearReversal ? "REVERSAL SELL" : "SNIPER SELL"
 else if legBullContinue
     legLastEvent := "CONTINUATION BUY"
+    legActiveCisd := legBullCisdSnapshot
     if na(legObjective) or legObjectiveHit
         legObjective := f_leg_bull_objective()
         legObjectiveHit := false
 else if legBearContinue
     legLastEvent := "CONTINUATION SELL"
+    legActiveCisd := legBearCisdSnapshot
     if na(legObjective) or legObjectiveHit
         legObjective := f_leg_bear_objective()
         legObjectiveHit := false
@@ -926,7 +936,7 @@ if barstate.islast and legShowDashboard
     table.cell(legDash, 0, 2, "Last event", text_color=color.silver)
     table.cell(legDash, 1, 2, legLastEvent, text_color=str.contains(legLastEvent, "BUY") ? color.lime : str.contains(legLastEvent, "SELL") ? color.red : color.orange)
     table.cell(legDash, 0, 3, "CISD", text_color=color.silver)
-    table.cell(legDash, 1, 3, legDelivery == 1 ? "Bull " + f_leg_price(legBullCisdSnapshot) : legDelivery == -1 ? "Bear " + f_leg_price(legBearCisdSnapshot) : "Waiting", text_color=color.white)
+    table.cell(legDash, 1, 3, legDelivery == 1 ? "Bull " + f_leg_price(legActiveCisd) : legDelivery == -1 ? "Bear " + f_leg_price(legActiveCisd) : "Waiting", text_color=color.white)
     table.cell(legDash, 0, 4, "Protected", text_color=color.silver)
     table.cell(legDash, 1, 4, legProtectedText, text_color=color.yellow)
     table.cell(legDash, 0, 5, "Objective", text_color=color.silver)
