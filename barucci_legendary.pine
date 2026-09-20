@@ -4,7 +4,7 @@
 // Philosophy: preserve the fast Barucci trigger, then use lightweight structure/context to stop weak opposite CISDs
 // from interrupting a real lower-timeframe move. Opposite CISD is a pullback until meaningful delivery failure is proven.
 //@version=6
-indicator("Barucci Legendary Buy & Sell [barucci_goon]", shorttitle="BARUCCI LEGEND", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("Barucci Legendary Buy & Sell [barucci_goon]", shorttitle="BLEGEND", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // ============================================================================
 // SIGNAL — INPUTS
@@ -692,10 +692,8 @@ if barstate.islast and array.size(pv_arr_time) > 0
 float legAtr = ta.atr(legAtrLength)
 
 // Primary anchor is the original Barucci htf. Secondary context is deliberately lightweight.
-[legPrimClose, legPrimBasis, legPrimUpper, legPrimLower, legPrimPctB, legPrimBullWalk, legPrimBearWalk] =
-    request.security(syminfo.tickerid, htf, f_leg_band_pack(), lookahead=barmerge.lookahead_off)
-[legSecClose, legSecBasis, legSecUpper, legSecLower, legSecPctB, legSecBullWalk, legSecBearWalk] =
-    request.security(syminfo.tickerid, legContextTf, f_leg_band_pack(), lookahead=barmerge.lookahead_off)
+[legPrimClose, legPrimBasis, legPrimUpper, legPrimLower, legPrimPctB, legPrimBullWalk, legPrimBearWalk] = request.security(syminfo.tickerid, htf, f_leg_band_pack(), lookahead=barmerge.lookahead_off)
+[legSecClose, legSecBasis, legSecUpper, legSecLower, legSecPctB, legSecBullWalk, legSecBearWalk] = request.security(syminfo.tickerid, legContextTf, f_leg_band_pack(), lookahead=barmerge.lookahead_off)
 
 float legBasis = ta.sma(close, legBbLength)
 float legDev = ta.stdev(close, legBbLength) * legBbMult
