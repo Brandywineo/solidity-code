@@ -1,0 +1,611 @@
+// ©mulani
+// ENTRY MODEL AI + Engulfing/RSI signal + Candle 2 Closure (RSI gated) + Camarilla Pivots
+//@version=6
+indicator("ENTRY MODEL AI +", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// SIGNAL — INPUTS
+// ============================================================================
+rsiSource     = close
+rsiLength     = 14
+rsiOverBought = 65
+rsiOverSold   = 35
+showEngulfing = input.bool(true, "Aggressive", group="ESignal")
+
+bullishCandle = close >= open[1] and close[1] < open[1] //and high >= high[1] and low <= low[1]
+bearishCandle = close <= open[1] and close[1] > open[1] //and high > high[1] and low < low[1]
+
+rsiValue = ta.rsi(rsiSource, rsiLength)
+isRSIOB  = rsiValue >= rsiOverBought
+isRSIOS  = rsiValue <= rsiOverSold
+
+engulfSignal = ((isRSIOS or isRSIOS[1] or isRSIOS[2]) and bullishCandle) or ((isRSIOB or isRSIOB[1] or isRSIOB[2]) and bearishCandle)
+
+plotshape(showEngulfing and engulfSignal and bullishCandle, title="EBullish", location=location.belowbar, color=color.green, style=shape.triangleup, text="buy", textcolor=color.black)
+plotshape(showEngulfing and engulfSignal and bearishCandle, title="EBearish", location=location.abovebar, color=color.red,   style=shape.triangledown, text="sell", textcolor=color.black)
+
+// ============================================================================
+// CANDLE 2 CLOSURE [LuxAlgo] — RSI GATED (60 / 30) — INPUTS
+// ============================================================================
+showCandle2 = input.bool(true, "Candle 2 Closure", group="Candle 2")
+
+// fixed internal settings (not exposed — toggle only)
+c2_reversalFilter  = false
+c2_filterLength    = 20
+c2_wickPercent     = 40
+c2_rsiLength       = 14
+c2_rsiOverbought   = 60
+c2_rsiOversold     = 30
+c2_bullColor       = color.new(color.teal, 0)
+c2_bearColor       = color.new(color.red, 0)
+c2_transparency    = 80
+c2_showZone        = true
+c2_showLevels      = true
+
+c2_rsiValue      = ta.rsi(close, c2_rsiLength)
+c2_rsiOversoldOk   = c2_rsiValue <= c2_rsiOversold
+c2_rsiOverboughtOk = c2_rsiValue >= c2_rsiOverbought
+
+var int c2_barMs = 1000 * timeframe.in_seconds()
+
+drawCandle2() =>
+    bool bullRaw = (c2_reversalFilter ? low == ta.lowest(c2_filterLength) : true) and close[1] < open[1] and low < low[1] and close > low[1]
+    bool bearRaw = (c2_reversalFilter ? high == ta.highest(c2_filterLength) : true) and close[1] > open[1] and high > high[1] and close < high[1]
+
+    bool bullClose = bullRaw and c2_rsiOversoldOk
+    bool bearClose = bearRaw and c2_rsiOverboughtOk
+
+    bool reversal = bullClose or bearClose
+    float wickThreshold = math.round_to_mintick(0.01 * c2_wickPercent * (high - low))
+    bool bullBigWick = (math.min(close, open) - low) > wickThreshold
+    bool bearBigWick = (high - math.max(close, open)) > wickThreshold
+    bool bigWick = (bullClose and bullBigWick) or (bearBigWick and bearClose)
+
+    if reversal
+        label.new(chart.point.new(time, na, bullClose ? low : high), '2', xloc.bar_time, bullClose ? yloc.belowbar : yloc.abovebar, color(na), bullClose ? label.style_label_up : label.style_label_down, bullClose ? c2_bullColor : c2_bearColor, size.small)
+
+        if c2_showLevels
+            line.new(chart.point.new(time[1], na, bullClose ? low[1] : high[1]), chart.point.new(time + c2_barMs, na, bullClose ? low[1] : high[1]), xloc.bar_time, color=chart.fg_color)
+
+        if c2_showZone
+            float top = 0
+            float bottom = 0
+            float bodyTop = math.max(close, open)
+            float bodyBottom = math.min(close, open)
+
+            if bigWick
+                top    := bullClose ? bodyBottom : high - math.round_to_mintick(0.5 * (high - bodyTop))
+                bottom := bullClose ? bodyBottom - math.round_to_mintick(0.5 * (bodyBottom - low)) : bodyTop
+            else
+                top    := bullClose ? bodyTop : hl2
+                bottom := bullClose ? hl2 : bodyBottom
+
+            box.new(chart.point.new(time, na, top), chart.point.new(time + c2_barMs, na, bottom), border_color=color(na), xloc=xloc.bar_time, bgcolor=bullClose ? color.new(c2_bullColor, c2_transparency) : color.new(c2_bearColor, c2_transparency))
+
+            if c2_showLevels
+                line.new(chart.point.new(time, na, bullClose ? bottom : top), chart.point.new(time + c2_barMs, na, bullClose ? bottom : top), xloc.bar_time, color=chart.fg_color)
+
+if showCandle2
+    drawCandle2()
+
+// ============================================================================
+// ENTRY MODEL AI — INPUTS
+// ============================================================================
+htf_opt   = input.string("Auto", "HTF Selection method:", options=["Auto","Fixed"], group="HTF", inline="htf0")
+htf_      = input.timeframe("60", "If Fixed HTF:", group="HTF", inline="htf0")
+
+bull_color     = input.color(color.teal, "HTF Bull Line", group="Colors", inline="clr")
+bear_color     = input.color(color.red,  "HTF Bear Line", group="Colors", inline="clr")
+range_color    = input.color(color.navy, "HTF Range Line", group="Colors", inline="clr")
+mid_color      = input.color(color.navy, "HTF Midline",   group="Colors", inline="clr1")
+swept_color    = input.color(#ffeb3b32,  "Sweep Box",     group="Colors", inline="clr1")
+bull_csd_color = color.rgb(95, 3, 252)
+bear_csd_color = color.rgb(107, 9, 255)
+
+// fixed internal settings (not exposed — CISD display/alert toggles removed from input table)
+showDots    = true
+showUnswept = input.bool(false, "Show unconfirmed (no-sweep) levels", group="Display")
+showSweeps  = true
+indalert    = true
+
+// ============================================================================
+// KILL ZONES — INPUTS (boxes, like session indicator)
+// ============================================================================
+showKillZones = input.bool(true, "Show Kill Zones", group="Kill Zones")
+kzTimezone    = input.string("Africa/Nairobi", "Kill Zone Timezone", group="Kill Zones")
+
+kz1Name  = input.string("Asian Killzone", "Zone 1 Name", group="Kill Zones", inline="kz1")
+kz1Color = input.color(color.new(#2962FF, 85), "Color", group="Kill Zones", inline="kz1")
+
+kz2Name  = input.string("London Killzone", "Zone 2 Name", group="Kill Zones", inline="kz2")
+kz2Color = input.color(color.new(#FF9800, 85), "Color", group="Kill Zones", inline="kz2")
+
+kz3Name  = input.string("New York Killzone", "Zone 3 Name", group="Kill Zones", inline="kz3")
+kz3Color = input.color(color.new(#089981, 85), "Color", group="Kill Zones", inline="kz3")
+
+// ============================================================================
+// HTF SELECTION
+// ============================================================================
+tf = timeframe.period
+
+f_look_tf(_tf) =>
+    _tf == "15S" ? "5"   :
+     _tf == "1"  ? "15"  :
+     _tf == "2"  ? "60"  :
+     _tf == "3"  ? "30"  :
+     _tf == "5"  ? "60"  :
+     _tf == "15" ? "240" :
+     _tf == "30" ? "720" :
+     _tf == "60" ? "1D"  :
+     _tf == "240"? "1W"  :
+     _tf == "D"  ? "1M"  :
+     _tf == "W"  ? "3M"  : tf
+
+htf = htf_opt == "Auto" ? f_look_tf(tf) : htf_
+
+f_tfcon(_tf) =>
+    timeframe.in_seconds(_tf) / 60 >= timeframe.in_seconds(timeframe.period) / 60
+
+// ============================================================================
+// HTF CANDLE TRACKING (current leg = 0, prior closed leg = 1)
+// ============================================================================
+var float o0 = open
+var float h0 = high
+var float l0 = low
+var int   t0 = time
+var float c0 = close
+var float h1 = high
+var float l1 = low
+var int   t1 = time
+var float c1 = close
+var float o1 = open
+var bool  h_swept1 = false
+var bool  l_swept1 = false
+
+if timeframe.change(htf)
+    t0 := time
+    o0 := open
+    h0 := high
+    l0 := low
+if high >= h0
+    h0 := high
+if low <= l0
+    l0 := low
+c0 := close
+
+if timeframe.change(htf)
+    o1 := o0[1]
+    h1 := h0[1]
+    l1 := l0[1]
+    t1 := t0[1]
+    c1 := close[1]
+
+// ============================================================================
+// SWEEP DETECTION (liquidity raid of prior HTF leg's high/low)
+// ============================================================================
+h_swept = h0 > h1 and c0 < h1
+l_swept = l0 < l1 and c0 > l1
+
+if timeframe.change(htf)
+    h_swept1 := h_swept[1]
+    l_swept1 := l_swept[1]
+
+var int lasthighswept = 0
+var int lastlowswept  = 0
+
+if showSweeps and f_tfcon(htf) and timeframe.period != htf and h0 > h1 and close < h1
+    boxhtf4 = box.new(left=t0, top=h0, right=time, bottom=h1, xloc=xloc.bar_time, border_width=1, border_style=line.style_dotted, bgcolor=swept_color, border_color=color.new(color.gray, 70))
+    lasthighswept := t0
+    if t0 == lasthighswept[1]
+        box.delete(boxhtf4[1])
+
+if showSweeps and f_tfcon(htf) and timeframe.period != htf and l0 < l1 and close > l1
+    boxhtf5 = box.new(left=t0, top=l1, right=time, bottom=l0, xloc=xloc.bar_time, border_width=1, border_style=line.style_dotted, bgcolor=swept_color, border_color=color.new(color.gray, 70))
+    lastlowswept := t0
+    if t0 == lastlowswept[1]
+        box.delete(boxhtf5[1])
+
+// ============================================================================
+// CISD LEVEL SEARCH (origin candle of the delivery leg)
+// ============================================================================
+add_to_array(arr, value) =>
+    array.unshift(arr, value)
+    if array.size(arr) > 100
+        array.pop(arr)
+
+var float bull_level = high
+var float bear_level = low
+var int   bull_index = bar_index
+var int   bear_index = bar_index
+var bucisdg = array.new_line()
+var becisdg = array.new_line()
+var bool bull_alarm = false
+var bool bear_alarm = false
+var bool xcisd = false
+var bool ycisd = false
+
+up = close > open
+dw = close < open
+eq = close == open
+
+if low == l0 and low < l1
+    if (dw[0] or eq[0]) and (up[1] or eq[1]) and not (eq[0] and eq[1])
+        bull_level := open
+        bull_index := bar_index
+        if showDots
+            add_to_array(bucisdg, line.new(bull_index, bull_level, bull_index + 4, bull_level, color=bull_csd_color, width=2, style=line.style_dotted))
+    else
+        for i = 2 to 10
+            if low[i] < low
+                break
+            if (up[i] or eq[i]) and dw[i - 1]
+                bar = i - 1
+                bull_level := open[bar]
+                bull_index := bar_index - bar
+                for j = bar to 0
+                    if open[j] > bull_level and dw[j]
+                        bull_level := open[j]
+                        bull_index := bar_index - j
+                if bull_level < open and not (close > open)
+                    bull_level := open
+                    bull_index := bar_index
+                if bull_level < open and (close > open)
+                    bull_level := high
+                    bull_index := bar_index
+                if showDots
+                    add_to_array(bucisdg, line.new(bull_index, bull_level, bull_index + 4, bull_level, color=bull_csd_color, width=2, style=line.style_dotted))
+                break
+
+if high == h0 and high > h1
+    if (up[0] or eq[0]) and (dw[1] or eq[1]) and not (eq[0] and eq[1])
+        bear_level := open
+        bear_index := bar_index
+        if showDots
+            add_to_array(becisdg, line.new(bear_index, bear_level, bear_index + 4, bear_level, color=bear_csd_color, width=2, style=line.style_dotted))
+    else
+        for i = 2 to 10
+            if high[i] > high
+                break
+            if (dw[i] or eq[i]) and up[i - 1]
+                ybar = i - 1
+                bear_level := open[ybar]
+                bear_index := bar_index - ybar
+                for j = ybar to 0
+                    if open[j] < bear_level and up[j]
+                        bear_level := open[j]
+                        bear_index := bar_index - j
+                if bear_level > open and not (close < open)
+                    bear_level := open
+                    bear_index := bar_index
+                if bear_level > open and (close < open)
+                    bear_level := low
+                    bear_index := bar_index
+                if showDots
+                    add_to_array(becisdg, line.new(bear_index, bear_level, bear_index + 4, bear_level, color=bear_csd_color, width=2, style=line.style_dotted))
+                break
+
+if high >= h0[1]
+    ycisd := false
+if low <= l0[1]
+    xcisd := false
+
+if array.size(bucisdg) > 1
+    for i = array.size(bucisdg) - 1 to 1
+        line.delete(array.get(bucisdg, i))
+        array.remove(bucisdg, i)
+if array.size(becisdg) > 1
+    for i = array.size(becisdg) - 1 to 1
+        line.delete(array.get(becisdg, i))
+        array.remove(becisdg, i)
+
+// ============================================================================
+// CISD CONFIRMATION (close crosses the level after a liquidity sweep)
+// ============================================================================
+xbull = close[1] > bull_level and (l_swept[1] or (l1 <= l0 and l_swept1)) and xcisd == false and bar_index - 1 >= bull_index
+if xbull
+    box.new(bull_index, bull_level, bar_index - 1, bull_level, border_color=bull_csd_color, border_width=1, text="BULL", text_color=bull_csd_color, text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_bottom)
+    bull_alarm := true
+    if indalert
+        alert(syminfo.tickerid + "," + timeframe.period + ",Bullish", alert.freq_once_per_bar)
+    bull_level := 1000000.0
+    xcisd := true
+    if array.size(bucisdg) > 0
+        line.delete(array.get(bucisdg, 0))
+        array.remove(bucisdg, 0)
+else if showUnswept and close[1] > bull_level and xcisd == false and bar_index - 1 >= bull_index
+    box.new(bull_index, bull_level, bar_index - 1, bull_level, border_color=color.new(bull_csd_color, 50), border_width=1, text="BULL", text_color=color.new(bull_csd_color, 50), text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_bottom)
+    bull_level := 1000000.0
+
+xbear = close[1] < bear_level and (h_swept[1] or (h1 >= h0 and h_swept1)) and ycisd == false and bar_index - 1 >= bear_index
+if xbear
+    box.new(bear_index, bear_level, bar_index - 1, bear_level, border_color=bear_csd_color, border_width=1, text="BEAR", text_color=bear_csd_color, text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_top)
+    bear_alarm := true
+    if indalert
+        alert(syminfo.tickerid + "," + timeframe.period + ",Bearish", alert.freq_once_per_bar)
+    bear_level := 0.0
+    ycisd := true
+    if array.size(becisdg) > 0
+        line.delete(array.get(becisdg, 0))
+        array.remove(becisdg, 0)
+else if showUnswept and close[1] < bear_level and ycisd == false and bar_index - 1 >= bear_index
+    box.new(bear_index, bear_level, bar_index - 1, bear_level, border_color=color.new(bear_csd_color, 50), border_width=1, text="BEAR", text_color=color.new(bear_csd_color, 50), text_size=size.tiny, text_halign=text.align_center, text_valign=text.align_top)
+    bear_level := 0.0
+
+plotshape(bull_alarm, title="Bullish", style=shape.arrowup, location=location.belowbar, color=bull_csd_color, size=size.tiny, offset=-1)
+plotshape(bear_alarm, title="Bearish", style=shape.arrowdown, location=location.abovebar, color=bear_csd_color, size=size.tiny, offset=-1)
+
+bull_alarm := false
+bear_alarm := false
+
+// ============================================================================
+// KILL ZONES — 2:00-4:59, 9:00-11:59, 15:00-18:00 (chosen timezone), drawn as boxes
+// ============================================================================
+kzHour   = hour(time, kzTimezone)
+kzMinute = minute(time, kzTimezone)
+kzMins   = kzHour * 60 + kzMinute
+
+inZone1 = kzMins >= 120 and kzMins < 300   // 2:00 - 4:59 Asian Killzone
+inZone2 = kzMins >= 540 and kzMins < 720   // 9:00 - 11:59 London Killzone
+inZone3 = kzMins >= 900 and kzMins < 1080  // 15:00 - 18:00 New York Killzone
+
+var box kz1Box = na
+var box kz2Box = na
+var box kz3Box = na
+var label kz1Label = na
+var label kz2Label = na
+var label kz3Label = na
+
+f_updateZoneBox(bool inZone, box zoneBox, label zoneLabel, string zoneName, color zoneColor) =>
+    box   bx = zoneBox
+    label lb = zoneLabel
+    if inZone
+        if na(bx)
+            bx := box.new(bar_index, high, bar_index, low, bgcolor=zoneColor, border_color=color.new(zoneColor, 0))
+            lb := label.new(bar_index, high, zoneName, style=label.style_label_down, color=color.new(color.black, 100), textcolor=color.new(zoneColor, 0), size=size.small)
+        else
+            box.set_top(bx, math.max(box.get_top(bx), high))
+            box.set_bottom(bx, math.min(box.get_bottom(bx), low))
+            box.set_right(bx, bar_index)
+            label.set_x(lb, bar_index)
+            label.set_y(lb, box.get_top(bx))
+    else
+        bx := na
+        lb := na
+    [bx, lb]
+
+if showKillZones
+    [b1, l1k] = f_updateZoneBox(inZone1, kz1Box, kz1Label, kz1Name, kz1Color)
+    kz1Box := b1
+    kz1Label := l1k
+
+    [b2, l2k] = f_updateZoneBox(inZone2, kz2Box, kz2Label, kz2Name, kz2Color)
+    kz2Box := b2
+    kz2Label := l2k
+
+    [b3, l3k] = f_updateZoneBox(inZone3, kz3Box, kz3Label, kz3Name, kz3Color)
+    kz3Box := b3
+    kz3Label := l3k
+
+// ============================================================================
+// ============================================================================
+// CAMARILLA PIVOTS (merged from "pivotss" — all identifiers prefixed pv_
+// to guarantee zero collisions with the ENTRY MODEL AI logic above)
+// ============================================================================
+// ============================================================================
+
+pv_SCALPING = "Scalping"
+pv_INTRADAY = "Intraday"
+pv_SWING    = "Swing"
+
+pv_pivot_time_frame = input.string(pv_INTRADAY, "Pivots Timeframe", options=[pv_SCALPING, pv_INTRADAY, pv_SWING], group="Pivots")
+pv_p_look_back       = input.int(1, "Number of Pivots Back", minval=1, maxval=20, group="Pivots")
+
+pv_show_labels             = input.bool(true, "Show Labels", group="Pivot Labels", inline="pvshowlabels")
+pv_show_prices             = input.bool(false, "Show Prices", group="Pivot Labels", inline="pvshowlabels")
+pv_show_timeframe_in_labels = input.bool(true, "Show timeframe in labels", group="Pivot Labels")
+pv_position_labels         = input.string("Right", "Labels Position", options=["Left", "Right"], group="Pivot Labels")
+pv_position_pivot_label    = input.string("Left", "Pivot Label Position", options=["Left", "Right"], group="Pivot Labels")
+pv_line_width = input.int(1, "Line Width", minval=1, maxval=10, group="Pivot Levels", inline="pvpivotstyle")
+pv_line_style = input.string(line.style_solid, "Line Style", options=[line.style_dashed, line.style_dotted, line.style_solid], group="Pivot Levels", inline="pvpivotstyle")
+
+var pv_DEF_COLOR_L = color.new(color.green, 0)
+var pv_DEF_COLOR_H = color.new(color.red, 0)
+var pv_DEF_COLORP  = #3179F5
+
+pv_p_color  = input.color(pv_DEF_COLORP, "P", inline="pvP", group="Pivot Levels")
+pv_p_show   = input.bool(true, "", inline="pvP", group="Pivot Levels")
+pv_cp_color = input.color(#245FC4, "CP", inline="pvCP", group="Pivot Levels")
+pv_cp_show  = input.bool(true, "", inline="pvCP", group="Pivot Levels")
+
+pv_s1_color = input.color(pv_DEF_COLOR_L, "L1", inline="pvL1/H1", group="Pivot Levels")
+pv_s1_show  = input.bool(true, "", inline="pvL1/H1", group="Pivot Levels")
+pv_r1_color = input.color(pv_DEF_COLOR_H, "H1", inline="pvL1/H1", group="Pivot Levels")
+pv_r1_show  = input.bool(true, "", inline="pvL1/H1", group="Pivot Levels")
+
+pv_s2_color = input.color(pv_DEF_COLOR_L, "L2", inline="pvL2/H2", group="Pivot Levels")
+pv_s2_show  = input.bool(true, "", inline="pvL2/H2", group="Pivot Levels")
+pv_r2_color = input.color(pv_DEF_COLOR_H, "H2", inline="pvL2/H2", group="Pivot Levels")
+pv_r2_show  = input.bool(true, "", inline="pvL2/H2", group="Pivot Levels")
+
+pv_s3_color = input.color(pv_DEF_COLOR_L, "L3", inline="pvL3/H3", group="Pivot Levels")
+pv_s3_show  = input.bool(true, "", inline="pvL3/H3", group="Pivot Levels")
+pv_r3_color = input.color(pv_DEF_COLOR_H, "H3", inline="pvL3/H3", group="Pivot Levels")
+pv_r3_show  = input.bool(true, "", inline="pvL3/H3", group="Pivot Levels")
+
+pv_s4_color = input.color(pv_DEF_COLOR_L, "L4", inline="pvL4/H4", group="Pivot Levels")
+pv_s4_show  = input.bool(false, "", inline="pvL4/H4", group="Pivot Levels")
+pv_r4_color = input.color(pv_DEF_COLOR_H, "H4", inline="pvL4/H4", group="Pivot Levels")
+pv_r4_show  = input.bool(false, "", inline="pvL4/H4", group="Pivot Levels")
+
+pv_s5_color = input.color(pv_DEF_COLOR_L, "L5", inline="pvL5/H5", group="Pivot Levels")
+pv_s5_show  = input.bool(false, "", inline="pvL5/H5", group="Pivot Levels")
+pv_r5_color = input.color(pv_DEF_COLOR_H, "H5", inline="pvL5/H5", group="Pivot Levels")
+pv_r5_show  = input.bool(false, "", inline="pvL5/H5", group="Pivot Levels")
+
+pv_s6_color = input.color(pv_DEF_COLOR_L, "L6", inline="pvL6/H6", group="Pivot Levels")
+pv_s6_show  = input.bool(false, "", inline="pvL6/H6", group="Pivot Levels")
+pv_r6_color = input.color(pv_DEF_COLOR_H, "H6", inline="pvL6/H6", group="Pivot Levels")
+pv_r6_show  = input.bool(false, "", inline="pvL6/H6", group="Pivot Levels")
+
+// ---------------- RESOLUTION HELPERS ----------------
+pv_get_pivot_resolution() =>
+    switch pv_pivot_time_frame
+        pv_SCALPING => "240"
+        pv_INTRADAY => "D"
+        pv_SWING    => "W"
+        => "D"
+
+pv_get_pivot_timeframe_label() =>
+    switch pv_pivot_time_frame
+        pv_SCALPING => "H4"
+        pv_INTRADAY => "1D"
+        pv_SWING    => "1W"
+        => "1D"
+
+pv_resolution = pv_get_pivot_resolution()
+
+pv_format_pivot_label(txt, y) =>
+    pv_label_text = pv_show_labels ? txt + (pv_show_timeframe_in_labels ? " (" + pv_get_pivot_timeframe_label() + ")" : "") : ""
+    pv_price_text = pv_show_prices ? (pv_show_labels and pv_show_timeframe_in_labels ? str.format(" • {0}", math.round_to_mintick(y)) : str.format(" ({0})", math.round_to_mintick(y))) : ""
+    pv_label_text + pv_price_text
+
+// ---------------- STATE ----------------
+var pv_arr_time = array.new_int()
+var pv_p  = array.new_float()
+var pv_cp = array.new_float()
+var pv_r1 = array.new_float(), var pv_s1 = array.new_float()
+var pv_r2 = array.new_float(), var pv_s2 = array.new_float()
+var pv_r3 = array.new_float(), var pv_s3 = array.new_float()
+var pv_r4 = array.new_float(), var pv_s4 = array.new_float()
+var pv_r5 = array.new_float(), var pv_s5 = array.new_float()
+var pv_r6 = array.new_float(), var pv_s6 = array.new_float()
+
+var pv_lines  = array.new_line()
+var pv_labels = array.new_label()
+
+// ---------------- PREV-PERIOD OHLC ----------------
+[pv_prev_high, pv_prev_low, pv_prev_close] = request.security(syminfo.tickerid, pv_resolution, [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+pv_sec_time = request.security(syminfo.tickerid, pv_resolution, time, lookahead=barmerge.lookahead_on)
+
+pv_is_new_period = ta.change(pv_sec_time) != 0
+
+// ---------------- CAMARILLA CALC ----------------
+pv_calc_camarilla(h, l, c) =>
+    range_ = h - l
+    piv = (h + l + c) / 3
+    r1v = c + range_ * 1.1 / 12.0
+    s1v = c - range_ * 1.1 / 12.0
+    r2v = c + range_ * 1.1 / 6.0
+    s2v = c - range_ * 1.1 / 6.0
+    r3v = c + range_ * 1.1 / 4.0
+    s3v = c - range_ * 1.1 / 4.0
+    r4v = c + range_ * 1.1 / 2.0
+    s4v = c - range_ * 1.1 / 2.0
+    r5v = h / l * c
+    s5v = 2 * c - r5v
+    r6v = r5v + 1.168 * (r5v - r4v)
+    s6v = c - (r6v - c)
+    [piv, c, r1v, s1v, r2v, s2v, r3v, s3v, r4v, s4v, r5v, s5v, r6v, s6v]
+
+if pv_is_new_period and not na(pv_prev_high)
+    [piv, cpv, r1v, s1v, r2v, s2v, r3v, s3v, r4v, s4v, r5v, s5v, r6v, s6v] = pv_calc_camarilla(pv_prev_high, pv_prev_low, pv_prev_close)
+    array.push(pv_arr_time, time)
+    array.push(pv_p, piv)
+    array.push(pv_cp, cpv)
+    array.push(pv_r1, r1v)
+    array.push(pv_s1, s1v)
+    array.push(pv_r2, r2v)
+    array.push(pv_s2, s2v)
+    array.push(pv_r3, r3v)
+    array.push(pv_s3, s3v)
+    array.push(pv_r4, r4v)
+    array.push(pv_s4, s4v)
+    array.push(pv_r5, r5v)
+    array.push(pv_s5, s5v)
+    array.push(pv_r6, r6v)
+    array.push(pv_s6, s6v)
+
+    if array.size(pv_arr_time) > pv_p_look_back
+        array.shift(pv_arr_time)
+        array.shift(pv_p)
+        array.shift(pv_cp)
+        array.shift(pv_r1)
+        array.shift(pv_s1)
+        array.shift(pv_r2)
+        array.shift(pv_s2)
+        array.shift(pv_r3)
+        array.shift(pv_s3)
+        array.shift(pv_r4)
+        array.shift(pv_s4)
+        array.shift(pv_r5)
+        array.shift(pv_s5)
+        array.shift(pv_r6)
+        array.shift(pv_s6)
+
+// ---------------- DRAWING HELPERS ----------------
+pv_draw_line(x1, x2, y, col) =>
+    array.push(pv_lines, line.new(x1, y, x2, y, xloc=xloc.bar_time, color=col, width=pv_line_width, style=pv_line_style))
+
+pv_draw_label(x, y, txt, col, is_pivot) =>
+    if pv_show_labels or pv_show_prices
+        lbl_style = is_pivot ? (pv_position_pivot_label == "Left" ? label.style_label_right : label.style_label_left) : (pv_position_labels == "Left" ? label.style_label_right : label.style_label_left)
+        array.push(pv_labels, label.new(x=x, y=y, text=pv_format_pivot_label(txt, y), textcolor=col, style=lbl_style, color=#00000000, xloc=xloc.bar_time))
+
+// ---------------- RENDER (last bar only) ----------------
+if barstate.islast and array.size(pv_arr_time) > 0
+    while array.size(pv_lines) > 0
+        line.delete(array.shift(pv_lines))
+    while array.size(pv_labels) > 0
+        label.delete(array.shift(pv_labels))
+
+    n = array.size(pv_arr_time)
+    res_seconds = timeframe.in_seconds(pv_resolution)
+
+    for i = 0 to n - 1
+        x1 = array.get(pv_arr_time, i)
+        x2 = i < n - 1 ? array.get(pv_arr_time, i + 1) : x1 + res_seconds * 1000
+        lbl_x = pv_position_labels == "Left" ? x1 : x2
+        piv_lbl_x = pv_position_pivot_label == "Left" ? x1 : x2
+
+        if pv_p_show
+            pv_draw_line(x1, x2, array.get(pv_p, i), pv_p_color)
+            pv_draw_label(piv_lbl_x, array.get(pv_p, i), "P", pv_p_color, true)
+        if pv_cp_show
+            pv_draw_line(x1, x2, array.get(pv_cp, i), pv_cp_color)
+            pv_draw_label(lbl_x, array.get(pv_cp, i), "CP", pv_cp_color, false)
+        if pv_r1_show
+            pv_draw_line(x1, x2, array.get(pv_r1, i), pv_r1_color)
+            pv_draw_label(lbl_x, array.get(pv_r1, i), "H1", pv_r1_color, false)
+        if pv_s1_show
+            pv_draw_line(x1, x2, array.get(pv_s1, i), pv_s1_color)
+            pv_draw_label(lbl_x, array.get(pv_s1, i), "L1", pv_s1_color, false)
+        if pv_r2_show
+            pv_draw_line(x1, x2, array.get(pv_r2, i), pv_r2_color)
+            pv_draw_label(lbl_x, array.get(pv_r2, i), "H2", pv_r2_color, false)
+        if pv_s2_show
+            pv_draw_line(x1, x2, array.get(pv_s2, i), pv_s2_color)
+            pv_draw_label(lbl_x, array.get(pv_s2, i), "L2", pv_s2_color, false)
+        if pv_r3_show
+            pv_draw_line(x1, x2, array.get(pv_r3, i), pv_r3_color)
+            pv_draw_label(lbl_x, array.get(pv_r3, i), "H3", pv_r3_color, false)
+        if pv_s3_show
+            pv_draw_line(x1, x2, array.get(pv_s3, i), pv_s3_color)
+            pv_draw_label(lbl_x, array.get(pv_s3, i), "L3", pv_s3_color, false)
+        if pv_r4_show
+            pv_draw_line(x1, x2, array.get(pv_r4, i), pv_r4_color)
+            pv_draw_label(lbl_x, array.get(pv_r4, i), "H4", pv_r4_color, false)
+        if pv_s4_show
+            pv_draw_line(x1, x2, array.get(pv_s4, i), pv_s4_color)
+            pv_draw_label(lbl_x, array.get(pv_s4, i), "L4", pv_s4_color, false)
+        if pv_r5_show
+            pv_draw_line(x1, x2, array.get(pv_r5, i), pv_r5_color)
+            pv_draw_label(lbl_x, array.get(pv_r5, i), "H5", pv_r5_color, false)
+        if pv_s5_show
+            pv_draw_line(x1, x2, array.get(pv_s5, i), pv_s5_color)
+            pv_draw_label(lbl_x, array.get(pv_s5, i), "L5", pv_s5_color, false)
+        if pv_r6_show
+            pv_draw_line(x1, x2, array.get(pv_r6, i), pv_r6_color)
+            pv_draw_label(lbl_x, array.get(pv_r6, i), "H6", pv_r6_color, false)
+        if pv_s6_show
+            pv_draw_line(x1, x2, array.get(pv_s6, i), pv_s6_color)
+            pv_draw_label(lbl_x, array.get(pv_s6, i), "L6", pv_s6_color, false)
